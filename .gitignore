@@ -1,0 +1,32 @@
+# 忽略包含API密钥和敏感信息的文件
+config.ini
+*.log
+check_log.txt
+
+# 忽略输出文件和结果
+OUTPUT/
+FDIP/results.txt
+*.txt
+
+# 忽略可执行文件
+*.exe
+ip-checker-final.exe
+
+# 忽略临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 忽略IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略GeoIP数据库文件（文件太大，不适合上传到GitHub）
+*.mmdb
+GeoLite2-Country.mmdb
+
+# 忽略 Claude Code 设置
+.claude/settings.local.json
