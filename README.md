@@ -83,21 +83,30 @@ socks5://user:pass@ip:port, additional_info
 
 ### 基本用法
 
+#### 交互式模式（推荐）
+不带任何参数运行程序，将显示图形化菜单界面：
+
 ```bash
-# 使用默认配置
+# Linux/macOS
 ./ip-checker
 
-# 指定配置文件
-./ip-checker -c custom_config.ini
+# Windows
+ip-checker.exe
+# 或
+.\ip-checker.exe
+```
 
-# 指定输入输出目录
+#### 命令行模式
+指定参数后直接运行检测，不显示交互菜单：
+
+```bash
+# Linux/macOS
 ./ip-checker -i /path/to/proxies -o /path/to/output
 
-# 自定义测速文件
-./ip-checker -s https://example.com/test_file.dat
-
-# 显示帮助信息
-./ip-checker -h
+# Windows
+ip-checker.exe -i FDIP -o OUTPUT
+# 或
+.\ip-checker.exe -i FDIP -o OUTPUT
 ```
 
 ### 命令行参数
@@ -105,10 +114,53 @@ socks5://user:pass@ip:port, additional_info
 | 参数 | 描述 | 默认值 |
 |------|------|--------|
 | `-c` | 指定配置文件路径 | `config.ini` |
-| `-i` | 指定代理输入目录 | `FDIP` |
-| `-o` | 指定输出目录 | `OUTPUT` |
-| `-s` | 自定义测速文件URL | 配置文件中的值 |
+| `-i` | 指定代理输入目录（覆盖配置文件设置） | 配置文件中的 fdip_dir |
+| `-o` | 指定输出目录（覆盖配置文件设置） | 配置文件中的 output_dir |
+| `-s` | 自定义测速文件URL（可选） | 配置文件中的值 |
 | `-h` | 显示帮助信息 | - |
+
+### 使用示例
+
+#### 1. 交互式使用
+```bash
+# 运行程序，进入图形菜单
+.\ip-checker.exe
+```
+
+#### 2. 命令行使用
+```bash
+# 指定输入输出目录（Windows）
+.\ip-checker.exe -i FDIP -o OUTPUT
+
+# 使用自定义配置文件
+.\ip-checker.exe -c my_config.ini
+
+# 自定义测速文件
+.\ip-checker.exe -s https://example.com/test.dat
+
+# 组合使用多个参数
+.\ip-checker.exe -i "C:\proxies" -o "C:\results" -s https://speed.test/file.dat
+
+# 查看帮助
+.\ip-checker.exe -h
+```
+
+#### 3. 不同操作系统示例
+```bash
+# Windows
+ip-checker.exe -i FDIP -o OUTPUT
+
+# Linux
+./ip-checker -i /home/user/proxies -o /home/user/results
+
+# macOS
+./ip-checker -i ./proxies -o ./results
+```
+
+### 模式说明
+
+- **交互式模式**：不指定参数时启动，提供图形菜单界面，适合新手用户
+- **命令行模式**：指定任意参数时启动，直接运行检测，适合自动化和脚本使用
 
 ## 📊 输出文件
 
@@ -287,6 +339,7 @@ go build -o ip-checker ip-checker.go
 
 ## 🙏 致谢
 
+- [Anji-318/Socks5-validity-testing](https://github.com/Anji-318/Socks5-validity-testing) - 本项目基于此优秀的 SOCKS5 代理检测工具进行开发
 - [MaxMind](https://www.maxmind.com/) - GeoIP 数据库
 - [Telegram Bot API](https://core.telegram.org/bots/api) - 通知服务
 - Go 社区 - 优秀的编程语言和工具
