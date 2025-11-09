@@ -295,7 +295,6 @@ go build -o ip-checker ip-checker.go
 
 - 项目主页: [GitHub Repository](https://github.com/your-username/ip-proxy-checker)
 - 问题反馈: [Issues](https://github.com/your-username/ip-proxy-checker/issues)
-- 邮箱: your-email@example.com
 
 ---
 
