@@ -29,13 +29,13 @@
 
 ### 1. 下载预编译版本
 
-从 [Releases](https://github.com/your-username/ip-proxy-checker/releases) 页面下载对应平台的可执行文件。
+从 [Releases](https://github.com/dazzlejc/ip-checker/releases) 页面下载对应平台的可执行文件。
 
 ### 2. 编译源码
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/ip-proxy-checker.git
+git clone https://github.com/dazzlejc/ip-checker.git
 cd ip-proxy-checker
 
 # 编译
@@ -313,7 +313,7 @@ export DEBUG=1
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/ip-proxy-checker.git
+git clone https://github.com/dazzlejc/ip-checker.git
 cd ip-proxy-checker
 
 # 安装依赖
@@ -346,8 +346,8 @@ go build -o ip-checker ip-checker.go
 
 ## 📞 联系方式
 
-- 项目主页: [GitHub Repository](https://github.com/your-username/ip-proxy-checker)
-- 问题反馈: [Issues](https://github.com/your-username/ip-proxy-checker/issues)
+- 项目主页: [GitHub Repository](https://github.com/dazzlejc/ip-checker)
+- 问题反馈: [Issues](https://github.com/dazzlejc/ip-checker/issues)
 - 邮箱: your-email@example.com
 
 ---
