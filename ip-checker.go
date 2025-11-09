@@ -9,13 +9,16 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,27 +46,252 @@ type Config struct {
 		MaxConcurrent int      `ini:"max_concurrent"`
 	} `ini:"settings"`
 	IPDetection struct {
-		Enabled         bool     `ini:"enabled"`
-		Services        []string `ini:"services"`
-		IPInfoToken     string   `ini:"ipinfo_token"`
-		IPRegistryKey   string   `ini:"ipregistry_key"`
-		MaxConcurrent   int      `ini:"max_concurrent"`
-		Timeout         int      `ini:"timeout"`
+		Enabled       bool     `ini:"enabled"`
+		Services      []string `ini:"services"`
+		IPInfoToken   string   `ini:"ipinfo_token"`
+		IPRegistryKey string   `ini:"ipregistry_key"`
+		MaxConcurrent int      `ini:"max_concurrent"`
+		Timeout       int      `ini:"timeout"`
 	} `ini:"ip_detection"`
 	AutoProxyUpdate struct {
-		Enabled          bool   `ini:"enabled"`
-		MaxProxies       int    `ini:"max_proxies"`
-		PreferResidential bool `ini:"prefer_residential"`
-		MaxLatency       float64 `ini:"max_latency"`
-		BackupConfig     bool   `ini:"backup_config"`
+		Enabled           bool    `ini:"enabled"`
+		MaxProxies        int     `ini:"max_proxies"`
+		PreferResidential bool    `ini:"prefer_residential"`
+		MaxLatency        float64 `ini:"max_latency"`
+		BackupConfig      bool    `ini:"backup_config"`
 	} `ini:"auto_proxy_update"`
 }
 
 var (
-	config    Config
-	logFile   *os.File
-	logMutex  sync.Mutex
+	config   Config
+	logFile  *os.File
+	logMutex sync.Mutex
 )
+
+// LogLevel 日志级别
+type LogLevel int
+
+const (
+	LogLevelDebug LogLevel = iota
+	LogLevelInfo
+	LogLevelWarn
+	LogLevelError
+	LogLevelFatal
+)
+
+// LogEntry 日志条目
+type LogEntry struct {
+	Level    LogLevel
+	Message  string
+	Time     time.Time
+	Context  map[string]interface{}
+	Error    error
+}
+
+// Logger 增强的日志记录器
+type Logger struct {
+	level     LogLevel
+	output    io.Writer
+	file      *os.File
+	mutex     sync.Mutex
+	enableDebug bool
+}
+
+// NewLogger 创建新的日志记录器
+func NewLogger(level LogLevel, filename string, enableDebug bool) (*Logger, error) {
+	logger := &Logger{
+		level:       level,
+		enableDebug: enableDebug,
+	}
+
+	if filename != "" {
+		file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, fmt.Errorf("无法打开日志文件: %w", err)
+		}
+		logger.file = file
+	}
+
+	// 创建多路输出
+	var output io.Writer = os.Stdout
+	if logger.file != nil {
+		output = io.MultiWriter(os.Stdout, logger.file)
+	}
+	logger.output = output
+
+	return logger, nil
+}
+
+// formatMessage 格式化日志消息
+func (l *Logger) formatMessage(entry LogEntry) string {
+	timestamp := entry.Time.Format("2006-01-02 15:04:05")
+	levelStr := l.getLevelString(entry.Level)
+
+	// 基础消息
+	message := fmt.Sprintf("[%s] %s: %s", timestamp, levelStr, entry.Message)
+
+	// 添加上下文信息
+	if len(entry.Context) > 0 {
+		var contextParts []string
+		for key, value := range entry.Context {
+			contextParts = append(contextParts, fmt.Sprintf("%s=%v", key, value))
+		}
+		message += fmt.Sprintf(" | %s", strings.Join(contextParts, ", "))
+	}
+
+	// 添加错误信息
+	if entry.Error != nil {
+		message += fmt.Sprintf(" | Error: %v", entry.Error)
+	}
+
+	return message
+}
+
+// getLevelString 获取级别字符串
+func (l *Logger) getLevelString(level LogLevel) string {
+	switch level {
+	case LogLevelDebug:
+		return "DEBUG"
+	case LogLevelInfo:
+		return "INFO"
+	case LogLevelWarn:
+		return "WARN"
+	case LogLevelError:
+		return "ERROR"
+	case LogLevelFatal:
+		return "FATAL"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// shouldLog 检查是否应该记录此级别的日志
+func (l *Logger) shouldLog(level LogLevel) bool {
+	return level >= l.level && (l.enableDebug || level > LogLevelDebug)
+}
+
+// writeLog 写入日志
+func (l *Logger) writeLog(entry LogEntry) {
+	if !l.shouldLog(entry.Level) {
+		return
+	}
+
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	// 格式化消息
+	message := l.formatMessage(entry)
+
+	// 屏蔽敏感信息
+	message = l.maskSensitiveData(message)
+
+	// 写入输出
+	fmt.Fprintln(l.output, message)
+}
+
+// maskSensitiveData 屏蔽敏感数据
+func (l *Logger) maskSensitiveData(message string) string {
+	if config.Telegram.BotToken != "" {
+		message = strings.ReplaceAll(message, config.Telegram.BotToken, "[REDACTED]")
+	}
+
+	// 屏蔽可能的密码
+	if strings.Contains(message, "password=") || strings.Contains(message, ":") {
+		// 简单的密码屏蔽逻辑
+		re := regexp.MustCompile(`(?i)(password|pwd)[=:][^s,}]+`)
+		message = re.ReplaceAllString(message, "${1}=[REDACTED]")
+	}
+
+	return message
+}
+
+// Debug 记录调试信息
+func (l *Logger) Debug(message string, context ...map[string]interface{}) {
+	ctx := map[string]interface{}{}
+	if len(context) > 0 {
+		ctx = context[0]
+	}
+	l.writeLog(LogEntry{
+		Level:   LogLevelDebug,
+		Message: message,
+		Time:    time.Now(),
+		Context: ctx,
+	})
+}
+
+// Info 记录信息
+func (l *Logger) Info(message string, context ...map[string]interface{}) {
+	ctx := map[string]interface{}{}
+	if len(context) > 0 {
+		ctx = context[0]
+	}
+	l.writeLog(LogEntry{
+		Level:   LogLevelInfo,
+		Message: message,
+		Time:    time.Now(),
+		Context: ctx,
+	})
+}
+
+// Warn 记录警告
+func (l *Logger) Warn(message string, err error, context ...map[string]interface{}) {
+	ctx := map[string]interface{}{}
+	if len(context) > 0 {
+		ctx = context[0]
+	}
+	l.writeLog(LogEntry{
+		Level:   LogLevelWarn,
+		Message: message,
+		Time:    time.Now(),
+		Context: ctx,
+		Error:   err,
+	})
+}
+
+// Error 记录错误
+func (l *Logger) Error(message string, err error, context ...map[string]interface{}) {
+	ctx := map[string]interface{}{}
+	if len(context) > 0 {
+		ctx = context[0]
+	}
+	l.writeLog(LogEntry{
+		Level:   LogLevelError,
+		Message: message,
+		Time:    time.Now(),
+		Context: ctx,
+		Error:   err,
+	})
+}
+
+// Fatal 记录致命错误并退出
+func (l *Logger) Fatal(message string, err error, context ...map[string]interface{}) {
+	ctx := map[string]interface{}{}
+	if len(context) > 0 {
+		ctx = context[0]
+	}
+	l.writeLog(LogEntry{
+		Level:   LogLevelFatal,
+		Message: message,
+		Time:    time.Now(),
+		Context: ctx,
+		Error:   err,
+	})
+	os.Exit(1)
+}
+
+// Close 关闭日志记录器
+func (l *Logger) Close() error {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	if l.file != nil {
+		return l.file.Close()
+	}
+	return nil
+}
+
+// 全局日志记录器
+var logger *Logger
 
 // LogWriter 是一个实现了 io.Writer 接口的结构体，用于将日志同时写入文件和控制台，并移除时间戳
 type LogWriter struct{}
@@ -102,12 +330,14 @@ func removeColorCodes(p []byte) []byte {
 
 // 定义颜色常量
 const (
-	ColorReset  = "\033[0m"
-	ColorRed    = "\033[31m"
-	ColorGreen  = "\033[32m"
-	ColorYellow = "\033[33m"
-	ColorBlue   = "\033[34m"
-	ColorCyan   = "\033[36m"
+	ColorReset   = "\033[0m"
+	ColorRed     = "\033[31m"
+	ColorGreen   = "\033[32m"
+	ColorYellow  = "\033[33m"
+	ColorBlue    = "\033[34m"
+	ColorMagenta = "\033[35m"
+	ColorCyan    = "\033[36m"
+	ColorWhite   = "\033[37m"
 )
 
 // 定义颜色列表，用于随机选择
@@ -238,30 +468,30 @@ var (
 
 	// IP_TYPE_MAP 存储IP类型到图标的映射
 	IP_TYPE_MAP = map[string]string{
-		"datacenter": "🖥️",
-		"business":   "🏢",
+		"datacenter":  "🖥️",
+		"business":    "🏢",
 		"residential": "🏠",
-		"mobile":     "📱",
-		"education":  "🎓",
-		"isp":        "🌐",
-		"hosting":    "🖥️",
-		"vpn":        "🔒",
-		"proxy":      "🔗",
-		"unknown":    "❓",
+		"mobile":      "📱",
+		"education":   "🎓",
+		"isp":         "🌐",
+		"hosting":     "🖥️",
+		"vpn":         "🔒",
+		"proxy":       "🔗",
+		"unknown":     "❓",
 	}
 
 	// IP_TYPE_DESCRIPTION 存储IP类型描述
 	IP_TYPE_DESCRIPTION = map[string]string{
-		"datacenter":   "数据中心IP",
-		"business":     "商业IP",
-		"residential":  "住宅IP",
-		"mobile":       "移动IP",
-		"education":    "教育IP",
-		"isp":          "ISP网络",
-		"hosting":      "主机IP",
-		"vpn":          "VPN网络",
-		"proxy":        "代理网络",
-		"unknown":      "未知类型",
+		"datacenter":  "数据中心IP",
+		"business":    "商业IP",
+		"residential": "住宅IP",
+		"mobile":      "移动IP",
+		"education":   "教育IP",
+		"isp":         "ISP网络",
+		"hosting":     "主机IP",
+		"vpn":         "VPN网络",
+		"proxy":       "代理网络",
+		"unknown":     "未知类型",
 	}
 
 	// FAILURE_REASON_MAP 定义失败原因的规范化映射
@@ -270,16 +500,16 @@ var (
 		"read: connection reset by peer": "连接被重置",
 		"context deadline exceeded":      "操作超时",
 		"connect: connection refused":    "连接被拒",
-		"dial tcp":                      "连接失败 (TCP)",
-		"lookup":                        "DNS解析失败",
-		"no route to host":              "主机不可达",
+		"dial tcp":                       "连接失败 (TCP)",
+		"lookup":                         "DNS解析失败",
+		"no route to host":               "主机不可达",
 		"connection was reset":           "连接重置",
-		"i/o timeout":                   "I/O超时",
+		"i/o timeout":                    "I/O超时",
 		"tls: handshake failure":         "TLS握手失败",
 		"tls: internal error":            "TLS内部错误",
-		"connection abort":              "连接异常中断",
-		"proxy connect tcp":             "代理连接失败",
-		"Bad Request":                   "请求错误 (Bad Request)",
+		"connection abort":               "连接异常中断",
+		"proxy connect tcp":              "代理连接失败",
+		"Bad Request":                    "请求错误 (Bad Request)",
 	}
 )
 
@@ -304,42 +534,79 @@ type ProxyResult struct {
 
 // Telegram API 响应结构体
 type telegramAPIResponse struct {
-	Ok          bool   `json:"ok"`
-	Description string `json:"description"`
+	Ok          bool                   `json:"ok"`
+	ErrorCode   int                    `json:"error_code"`
+	Description string                 `json:"description"`
+	Result      *telegramMessageResult `json:"result"`
+}
+
+// Telegram 消息结果结构体
+type telegramMessageResult struct {
+	MessageID int                  `json:"message_id"`
+	From      *telegramUser        `json:"from"`
+	Chat      *telegramChat        `json:"chat"`
+	Date      int                  `json:"date"`
+	Document  *telegramDocument    `json:"document"`
+	Text      string               `json:"text"`
+}
+
+// Telegram 用户结构体
+type telegramUser struct {
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
+}
+
+// Telegram 聊天结构体
+type telegramChat struct {
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
+}
+
+// Telegram 文档结构体
+type telegramDocument struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	FileName     string `json:"file_name"`
+	MimeType     string `json:"mime_type"`
+	FileSize     int64  `json:"file_size"`
 }
 
 // IPTypeDetectionResponse IP类型检测API响应结构体
 type IPTypeDetectionResponse struct {
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	Country     string `json:"country"`
-	CountryCode string `json:"countryCode"`
-	Region      string `json:"region"`
-	RegionName  string `json:"regionName"`
-	City        string `json:"city"`
-	Zip         string `json:"zip"`
+	Status      string  `json:"status"`
+	Message     string  `json:"message"`
+	Country     string  `json:"country"`
+	CountryCode string  `json:"countryCode"`
+	Region      string  `json:"region"`
+	RegionName  string  `json:"regionName"`
+	City        string  `json:"city"`
+	Zip         string  `json:"zip"`
 	Lat         float64 `json:"lat"`
 	Lon         float64 `json:"lon"`
-	Timezone    string `json:"timezone"`
-	ISP         string `json:"isp"`
-	ORG         string `json:"org"`
-	AS          string `json:"as"`
-	Query       string `json:"query"`
+	Timezone    string  `json:"timezone"`
+	ISP         string  `json:"isp"`
+	ORG         string  `json:"org"`
+	AS          string  `json:"as"`
+	Query       string  `json:"query"`
 }
 
 // IPInfoResponse IPInfo API响应结构体
 type IPInfoResponse struct {
-	IP       string            `json:"ip"`
-	Hostname string            `json:"hostname"`
-	City     string            `json:"city"`
-	Region   string            `json:"region"`
-	Country  string            `json:"country"`
-	Loc      string            `json:"loc"`
-	Org      string            `json:"org"`
-	Postal   string            `json:"postal"`
-	Timezone string            `json:"timezone"`
-	Readme   string            `json:"readme"`
-	Type     string            `json:"type"`
+	IP       string `json:"ip"`
+	Hostname string `json:"hostname"`
+	City     string `json:"city"`
+	Region   string `json:"region"`
+	Country  string `json:"country"`
+	Loc      string `json:"loc"`
+	Org      string `json:"org"`
+	Postal   string `json:"postal"`
+	Timezone string `json:"timezone"`
+	Readme   string `json:"readme"`
+	Type     string `json:"type"`
 }
 
 // GeoIPManager 结构体用于封装 GeoIP Reader 和缓存
@@ -358,12 +625,6 @@ var geoIPManager = &GeoIPManager{
 var (
 	telegramClientCache *http.Client
 	clientCacheMutex    sync.Mutex
-)
-
-// failedProxiesCache 记录已知的失效代理，避免重复尝试
-var (
-	failedProxiesCache = make(map[string]time.Time)
-	failedProxiesMutex sync.RWMutex
 )
 
 // 计算字符串在终端中的显示宽度，中文字符占2个宽度（🚫固化）
@@ -471,200 +732,89 @@ func loadConfig(configPath string) error {
 func downloadGeoIPDatabase(dbPath string) bool {
 	log.Printf("ℹ️ 正在下载 GeoIP 数据库到: %s\n", dbPath)
 
-	// 清理过期的失效代理缓存
-	cleanExpiredFailedProxies()
-
-	// 首先尝试通过预设代理下载，跳过已知失效的代理
 	for _, proxyURL := range config.Settings.PresetProxy {
-		// 检查是否在失效代理缓存中
-		failedProxiesMutex.RLock()
-		if failTime, exists := failedProxiesCache[proxyURL]; exists {
-			// 如果在30分钟内失败过，跳过这个代理
-			if time.Since(failTime) < 30*time.Minute {
-				failedProxiesMutex.RUnlock()
-				log.Printf("⏭️ 跳过最近失效的代理 %s (剩余冷却时间: %.1f分钟)\n",
-					proxyURL, (30*time.Minute-time.Since(failTime)).Minutes())
-				continue
-			}
-		}
-		failedProxiesMutex.RUnlock()
-
 		log.Printf("⏳ 尝试通过预设代理 %s 下载 GeoIP 数据库...\n", proxyURL)
 
-		if downloadGeoIPWithProxy(dbPath, proxyURL) {
-			// 下载成功，从失效代理缓存中移除（如果之前存在）
-			failedProxiesMutex.Lock()
-			delete(failedProxiesCache, proxyURL)
-			failedProxiesMutex.Unlock()
-			return true
-		}
-
-		log.Printf("❌ 代理 %s 下载失败，尝试下一个代理\n", proxyURL)
-
-		// 将失效代理添加到缓存
-		failedProxiesMutex.Lock()
-		failedProxiesCache[proxyURL] = time.Now()
-		failedProxiesMutex.Unlock()
-	}
-
-	// 如果所有代理都失败或被跳过，尝试直连
-	log.Printf("❌ 所有预设代理均失败或已被跳过，将尝试直连下载...\n")
-	return downloadGeoIPWithProxy(dbPath, "")
-}
-
-// downloadGeoIPWithProxy 使用指定代理下载 GeoIP 数据库
-func downloadGeoIPWithProxy(dbPath, proxyURL string) bool {
-	// 首先清理可能存在的临时文件
-	tempPath := dbPath + ".tmp"
-	if _, err := os.Stat(tempPath); err == nil {
-		log.Printf("🧹 清理旧的临时文件: %s\n", tempPath)
-		os.Remove(tempPath)
-	}
-
-	var transport *http.Transport
-	var err error
-
-	if proxyURL == "" {
-		log.Printf("🔗 使用直连方式下载\n")
-		transport = &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: 10 * time.Second,
-			}).DialContext,
-		}
-	} else {
-		log.Printf("🔗 使用代理: %s\n", proxyURL)
-		transport, err = createTransportWithProxy(proxyURL)
+		transport, err := createTransportWithProxy(proxyURL)
 		if err != nil {
 			log.Printf("❌ 创建代理 transport 失败: %v\n", err)
-			return false
+			continue
+		}
+
+		client := &http.Client{
+			Transport: transport,
+			Timeout:   60 * time.Second,
+		}
+
+		resp, err := client.Get(GEOIP_DB_URL)
+		if err != nil {
+			log.Printf("❌ 通过代理 %s 下载 GeoIP 数据库失败: %v\n", proxyURL, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("❌ 下载 GeoIP 数据库 HTTP 状态码非 200: %d\n", resp.StatusCode)
+			continue
+		}
+
+		outFile, err := os.Create(dbPath)
+		if err != nil {
+			log.Printf("❌ 创建 GeoIP 数据库文件失败: %v\n", err)
+			continue
+		}
+		defer outFile.Close()
+
+		_, err = io.Copy(outFile, resp.Body)
+		if err != nil {
+			log.Printf("❌ 写入 GeoIP 数据库文件失败: %v\n", err)
+			continue
+		}
+
+		if isGeoIPFileValid(dbPath) {
+			log.Printf("🟢 成功通过代理 %s 下载 GeoIP 数据库到 %s\n", proxyURL, dbPath)
+			return true
+		} else {
+			log.Printf("⚠️ 通过代理 %s 下载的 GeoIP 数据库无效，删除文件。\n", proxyURL)
+			os.Remove(dbPath)
 		}
 	}
 
-	// 使用更长的超时时间来下载大文件
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   300 * time.Second, // 5分钟超时
-	}
-
-	log.Printf("📥 开始下载 GeoIP 数据库...\n")
-	startTime := time.Now()
-
+	log.Printf("❌ 无法下载 GeoIP 数据库到 %s，将尝试直连...\n", dbPath)
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Get(GEOIP_DB_URL)
 	if err != nil {
-		log.Printf("❌ 下载失败: %v\n", err)
+		log.Printf("❌ 直连下载 GeoIP 数据库失败: %v\n", err)
 		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ HTTP 状态码错误: %d\n", resp.StatusCode)
+		log.Printf("❌ 直连下载 GeoIP 数据库 HTTP 状态码非 200: %d\n", resp.StatusCode)
 		return false
 	}
 
-	// 获取文件大小用于进度显示
-	contentLength := resp.ContentLength
-	if contentLength > 0 {
-		log.Printf("📊 文件大小: %.2f MB\n", float64(contentLength)/1024/1024)
-	}
-
-	// 创建临时文件
-	outFile, err := os.Create(tempPath)
+	outFile, err := os.Create(dbPath)
 	if err != nil {
-		log.Printf("❌ 创建临时文件失败: %v\n", err)
+		log.Printf("❌ 直连创建 GeoIP 数据库文件失败: %v\n", err)
 		return false
 	}
+	defer outFile.Close()
 
-	// 确保在函数退出时处理文件关闭和清理
-	defer func() {
-		outFile.Close()
-		// 如果最终文件不存在，说明下载失败，清理临时文件
-		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-			os.Remove(tempPath)
-		}
-	}()
-
-	// 创建进度报告器
-	writer := &progressWriter{
-		writer:    outFile,
-		total:     contentLength,
-		startTime: startTime,
-	}
-
-	// 复制数据并显示进度
-	written, err := io.Copy(writer, resp.Body)
+	_, err = io.Copy(outFile, resp.Body)
 	if err != nil {
-		log.Printf("❌ 写入文件失败: %v\n", err)
+		log.Printf("❌ 直连写入 GeoIP 数据库文件失败: %v\n", err)
 		return false
 	}
-
-	// 确保数据写入磁盘
-	if err := outFile.Sync(); err != nil {
-		log.Printf("⚠️ 刷新文件到磁盘失败: %v\n", err)
-	}
-
-	duration := time.Since(startTime)
-	log.Printf("✅ 下载完成！耗时: %.2f 秒，平均速度: %.2f KB/s\n",
-		duration.Seconds(), float64(written)/duration.Seconds()/1024)
-
-	// 关闭文件以便重命名
-	outFile.Close()
-
-	// 重命名为最终文件名
-	if err := os.Rename(tempPath, dbPath); err != nil {
-		log.Printf("❌ 重命名文件失败: %v\n", err)
-		return false
-	}
-
-	// 验证下载的文件
 	if isGeoIPFileValid(dbPath) {
-		connectionType := "直连"
-		if proxyURL != "" {
-			connectionType = "代理 " + proxyURL
-		}
-		log.Printf("🟢 成功通过 %s 下载并验证 GeoIP 数据库\n", connectionType)
+		log.Printf("🟢 成功通过直连下载 GeoIP 数据库到 %s\n", dbPath)
 		return true
-	} else {
-		log.Printf("❌ 下载的文件验证失败，删除文件\n")
-		os.Remove(dbPath)
-		return false
 	}
+	log.Printf("❌ 直连下载的 GeoIP 数据库无效，删除文件。\n")
+	os.Remove(dbPath)
+	return false
 }
 
-// progressWriter 用于显示下载进度的写入器
-type progressWriter struct {
-	writer    io.Writer
-	total     int64
-	written   int64
-	startTime time.Time
-	lastLog   time.Time
-}
-
-func (pw *progressWriter) Write(p []byte) (int, error) {
-	n, err := pw.writer.Write(p)
-	if err != nil {
-		return n, err
-	}
-
-	pw.written += int64(n)
-
-	// 每5秒更新一次进度
-	now := time.Now()
-	if now.Sub(pw.lastLog) >= 5*time.Second {
-		if pw.total > 0 {
-			percent := float64(pw.written) / float64(pw.total) * 100
-			speed := float64(pw.written) / now.Sub(pw.startTime).Seconds() / 1024
-			log.Printf("📈 下载进度: %.1f%% (%.2f MB/%.2f MB), 速度: %.2f KB/s\n",
-				percent, float64(pw.written)/1024/1024, float64(pw.total)/1024/1024, speed)
-		} else {
-			speed := float64(pw.written) / now.Sub(pw.startTime).Seconds() / 1024
-			log.Printf("📈 已下载: %.2f MB, 速度: %.2f KB/s\n",
-				float64(pw.written)/1024/1024, speed)
-		}
-		pw.lastLog = now
-	}
-
-	return n, nil
-}
 
 // isGeoIPFileValid 验证 GeoIP 数据库文件是否有效且未过期
 func isGeoIPFileValid(filePath string) bool {
@@ -776,6 +926,300 @@ func closeGeoIPReader() {
 		}
 		geoIPManager.reader = nil
 	}
+}
+
+// clearScreen 清屏函数
+func clearScreen() {
+	fmt.Print("\033[H\033[2J")
+}
+
+// displaySystemStatus 显示系统状态信息
+func displaySystemStatus() {
+	fmt.Println(ColorCyan + "┌─────────────────────── 系统状态 ───────────────────────┐" + ColorReset)
+
+	// 显示运行时间
+	hostname, _ := os.Hostname()
+	fmt.Printf("│ 🖥️  主机名: %s", hostname)
+	padSpaces(45 - len(hostname) - 8)
+	fmt.Println("│")
+
+	// 显示当前时间
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Printf("│ 🕐 当前时间: %s", currentTime)
+	padSpaces(45 - len(currentTime) - 10)
+	fmt.Println("│")
+
+	// 显示 GeoIP 数据库状态
+	if _, err := os.Stat(GEOIP_DB_PATH); err == nil {
+		if isGeoIPFileValid(GEOIP_DB_PATH) {
+			fileInfo, _ := os.Stat(GEOIP_DB_PATH)
+			mtime := fileInfo.ModTime().Format("2006-01-02")
+			fmt.Printf("│ " + ColorGreen + "✅ GeoIP 数据库: 已更新 (%s)" + ColorReset, mtime)
+			padSpaces(26 - len(mtime))
+			fmt.Println("│")
+		} else {
+			fmt.Println("│ " + ColorYellow + "⚠️  GeoIP 数据库: 需要更新" + ColorReset + "                   │")
+		}
+	} else {
+		fmt.Println("│ " + ColorRed + "❌ GeoIP 数据库: 不存在" + ColorReset + "                        │")
+	}
+
+	fmt.Println(ColorCyan + "└─────────────────────────────────────────────────┘" + ColorReset)
+	fmt.Println()
+}
+
+// displayConfigStatus 显示配置状态
+func displayConfigStatus() {
+	fmt.Println(ColorYellow + "┌─────────────────────── 配置状态 ───────────────────────┐" + ColorReset)
+
+	// Telegram 配置状态
+	if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
+		fmt.Println("│ " + ColorGreen + "✅ Telegram 通知: 已配置" + ColorReset + "                           │")
+	} else {
+		fmt.Println("│ " + ColorRed + "❌ Telegram 通知: 未配置" + ColorReset + "                           │")
+	}
+
+	// 代理目录状态
+	fdipPath := filepath.Join(".", config.Settings.FdipDir)
+	if _, err := os.Stat(fdipPath); err == nil {
+		fmt.Printf("│ " + ColorGreen + "✅ 代理目录: %s", config.Settings.FdipDir)
+		padSpaces(35 - len(config.Settings.FdipDir))
+		fmt.Println("│")
+	} else {
+		fmt.Printf("│ " + ColorRed + "❌ 代理目录: %s", config.Settings.FdipDir)
+		padSpaces(35 - len(config.Settings.FdipDir))
+		fmt.Println("│")
+	}
+
+	fmt.Println(ColorYellow + "└─────────────────────────────────────────────────┘" + ColorReset)
+}
+
+// padSpaces 输出空格填充
+func padSpaces(count int) {
+	for i := 0; i < count; i++ {
+		fmt.Print(" ")
+	}
+}
+
+// updateGeoIPDatabase 更新 GeoIP 数据库
+func updateGeoIPDatabase() {
+	fmt.Println(ColorBlue + "\n🌐 正在更新 GeoIP 数据库..." + ColorReset)
+	log.Println("----------- GeoIP 数据库更新 -----------")
+
+	if _, err := os.Stat(GEOIP_DB_PATH); err == nil && isGeoIPFileValid(GEOIP_DB_PATH) {
+		log.Printf("✅ 本地 GeoIP 数据库已存在且有效: %s\n", GEOIP_DB_PATH)
+		fileInfo, _ := os.Stat(GEOIP_DB_PATH)
+		mtime := fileInfo.ModTime()
+		ageDays := time.Since(mtime).Hours() / 24
+		if ageDays < 7 {
+			log.Printf("ℹ️ 数据库较新 (%.1f 天)，无需更新。\n", ageDays)
+			log.Println("------------------------------------------")
+			fmt.Println(ColorYellow + "⏸️ 数据库较新，跳过更新。" + ColorReset)
+		} else {
+			log.Printf("⚠️ 数据库较旧 (%.1f 天)，将强制更新。\n", ageDays)
+			log.Println("------------------------------------------")
+			downloadGeoIPDatabase(GEOIP_DB_PATH)
+			fmt.Println(ColorGreen + "✅ 数据库更新完成！" + ColorReset)
+		}
+	} else {
+		if err == nil {
+			log.Printf("⚠️ 本地 GeoIP 数据库无效，将重新下载。\n")
+			os.Remove(GEOIP_DB_PATH)
+		} else {
+			log.Printf("ℹ️ 本地 GeoIP 数据库不存在，将下载最新文件。\n")
+		}
+		log.Println("------------------------------------------")
+		downloadGeoIPDatabase(GEOIP_DB_PATH)
+		fmt.Println(ColorGreen + "✅ 数据库下载完成！" + ColorReset)
+	}
+
+	fmt.Println(ColorYellow + "\n按 Enter 键返回主菜单..." + ColorReset)
+	reader := bufio.NewReader(os.Stdin)
+	reader.ReadString('\n')
+}
+
+// showConfigMenu 显示配置菜单
+func showConfigMenu() {
+	for {
+		clearScreen()
+		fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
+		fmt.Println(ColorCyan + "║" + ColorYellow + "                    ⚙️ 配置设置菜单                      " + ColorReset + ColorCyan + "║" + ColorReset)
+		fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
+		fmt.Println()
+
+		fmt.Println(ColorYellow + "┌─────────────────────── 配置选项 ───────────────────────┐" + ColorReset)
+		fmt.Println("│ " + ColorBlue + "1. 📝 查看/编辑配置文件" + ColorReset + "                            │")
+		fmt.Println("│ " + ColorGreen + "2. 🔄 重新加载配置" + ColorReset + "                                 │")
+		fmt.Println("│ " + ColorCyan + "3. 📊 显示当前配置" + ColorReset + "                                 │")
+		fmt.Println("│ " + ColorRed + "4. 🔙 返回主菜单" + ColorReset + "                                     │")
+		fmt.Println(ColorYellow + "└─────────────────────────────────────────────────┘" + ColorReset)
+		fmt.Println()
+
+		fmt.Print(ColorGreen + "请输入您的选择 (1-4): " + ColorReset)
+
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		choice := strings.TrimSpace(input)
+
+		switch choice {
+		case "1":
+			fmt.Println(ColorBlue + "📝 请使用文本编辑器编辑 config.ini 文件" + ColorReset)
+			fmt.Println(ColorYellow + "按 Enter 键继续..." + ColorReset)
+			reader.ReadString('\n')
+		case "2":
+			if err := loadConfig("config.ini"); err != nil {
+				fmt.Println(ColorRed + "❌ 配置重载失败: " + err.Error() + ColorReset)
+			} else {
+				fmt.Println(ColorGreen + "✅ 配置重载成功！" + ColorReset)
+			}
+			fmt.Println(ColorYellow + "按 Enter 键继续..." + ColorReset)
+			reader.ReadString('\n')
+		case "3":
+			showCurrentConfig()
+		case "4":
+			return
+		default:
+			fmt.Println(ColorRed + "\n⚠️ 无效的选择，请输入 1-4 之间的数字。" + ColorReset)
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+// showCurrentConfig 显示当前配置
+func showCurrentConfig() {
+	clearScreen()
+	fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
+	fmt.Println(ColorCyan + "║" + ColorYellow + "                    📊 当前配置信息                      " + ColorReset + ColorCyan + "║" + ColorReset)
+	fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
+	fmt.Println()
+
+	fmt.Println(ColorYellow + "📋 基本设置:" + ColorReset)
+	fmt.Printf("  - 代理目录: %s\n", config.Settings.FdipDir)
+	fmt.Printf("  - 最大并发: %d\n", config.Settings.MaxConcurrent)
+	fmt.Printf("  - 检测超时: %d 秒\n", config.Settings.CheckTimeout)
+	fmt.Printf("  - 输出目录: %s\n", config.Settings.OutputDir)
+	fmt.Println()
+
+	fmt.Println(ColorYellow + "📱 Telegram 设置:" + ColorReset)
+	if config.Telegram.BotToken != "" {
+		fmt.Printf("  - Bot Token: %s...%s\n",
+			config.Telegram.BotToken[:min(10, len(config.Telegram.BotToken))],
+			config.Telegram.BotToken[max(0, len(config.Telegram.BotToken)-4):])
+	} else {
+		fmt.Println("  - Bot Token: 未配置")
+	}
+
+	if config.Telegram.ChatID != "" {
+		fmt.Printf("  - Chat ID: %s\n", config.Telegram.ChatID)
+	} else {
+		fmt.Println("  - Chat ID: 未配置")
+	}
+	fmt.Println()
+
+	fmt.Println(ColorYellow + "🔧 IP检测设置:" + ColorReset)
+	fmt.Printf("  - IP检测启用: %t\n", config.IPDetection.Enabled)
+	fmt.Printf("  - 最大并发: %d\n", config.IPDetection.MaxConcurrent)
+	fmt.Printf("  - 超时时间: %d 秒\n", config.IPDetection.Timeout)
+	fmt.Printf("  - 服务数量: %d\n", len(config.IPDetection.Services))
+	fmt.Println()
+
+	fmt.Println(ColorGreen + "按 Enter 键返回配置菜单..." + ColorReset)
+	reader := bufio.NewReader(os.Stdin)
+	reader.ReadString('\n')
+}
+
+// showStatistics 显示统计信息
+func showStatistics() {
+	clearScreen()
+	fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
+	fmt.Println(ColorCyan + "║" + ColorMagenta + "                    📊 统计信息                         " + ColorReset + ColorCyan + "║" + ColorReset)
+	fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
+	fmt.Println()
+
+	fmt.Println(ColorYellow + "🔧 系统信息:" + ColorReset)
+	fmt.Printf("  - Go 版本: %s\n", runtime.Version())
+	fmt.Printf("  - 操作系统: %s\n", runtime.GOOS)
+	fmt.Printf("  - 架构: %s\n", runtime.GOARCH)
+	fmt.Printf("  - CPU 核心数: %d\n", runtime.NumCPU())
+	fmt.Printf("  - 内存使用: %.2f MB\n", float64(getMemoryUsage())/1024/1024)
+	fmt.Println()
+
+	// 检查代理目录中的文件数量
+	fdipPath := filepath.Join(".", config.Settings.FdipDir)
+	if files, err := os.ReadDir(fdipPath); err == nil {
+		fmt.Printf(ColorGreen + "📁 代理目录 '%s' 中有 %d 个文件\n" + ColorReset, config.Settings.FdipDir, len(files))
+	}
+
+	// GeoIP 数据库信息
+	if fileInfo, err := os.Stat(GEOIP_DB_PATH); err == nil {
+		sizeMB := float64(fileInfo.Size()) / 1024 / 1024
+		fmt.Printf(ColorGreen + "🌐 GeoIP 数据库大小: %.2f MB\n" + ColorReset, sizeMB)
+		fmt.Printf(ColorGreen + "🌐 最后更新: %s\n" + ColorReset, fileInfo.ModTime().Format("2006-01-02 15:04:05"))
+	}
+
+	fmt.Println()
+	fmt.Println(ColorGreen + "按 Enter 键返回主菜单..." + ColorReset)
+	reader := bufio.NewReader(os.Stdin)
+	reader.ReadString('\n')
+}
+
+// testNetworkConnection 测试网络连接
+func testNetworkConnection() {
+	clearScreen()
+	fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
+	fmt.Println(ColorCyan + "║" + ColorYellow + "                    🧪 网络连接测试                       " + ColorReset + ColorCyan + "║" + ColorReset)
+	fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
+	fmt.Println()
+
+	testSites := []string{
+		"www.google.com",
+		"www.github.com",
+		"www.cloudflare.com",
+		"8.8.8.8",
+	}
+
+	fmt.Println(ColorYellow + "正在测试网络连接..." + ColorReset)
+	fmt.Println()
+
+	for _, site := range testSites {
+		fmt.Printf(ColorBlue + "🔍 测试连接到: %s" + ColorReset, site)
+
+		start := time.Now()
+		cmd := exec.Command("ping", "-n", "1", site)
+		if runtime.GOOS != "windows" {
+			cmd = exec.Command("ping", "-c", "1", site)
+		}
+
+		_, err := cmd.Output()
+		duration := time.Since(start)
+
+		if err != nil {
+			fmt.Printf(ColorRed + " ❌ 失败 (%.2fs)\n" + ColorReset, duration.Seconds())
+		} else {
+			fmt.Printf(ColorGreen + " ✅ 成功 (%.2fs)\n" + ColorReset, duration.Seconds())
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(ColorGreen + "网络连接测试完成！" + ColorReset)
+	fmt.Println(ColorYellow + "按 Enter 键返回主菜单..." + ColorReset)
+	reader := bufio.NewReader(os.Stdin)
+	reader.ReadString('\n')
+}
+
+// getMemoryUsage 获取内存使用情况
+func getMemoryUsage() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.Alloc
+}
+
+// max 返回两个整数中的较大值
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // getCountryFromIPBatch 批量查询 IP 的国家代码
@@ -913,22 +1357,54 @@ func detectIPTypeWithIPInfo(ip string) (IPTypeInfo, error) {
 		return IPTypeInfo{}, fmt.Errorf("IPInfo Token未配置")
 	}
 
-	client := &http.Client{Timeout: time.Duration(config.IPDetection.Timeout) * time.Second}
+	// 验证IP地址格式
+	if net.ParseIP(ip) == nil {
+		return IPTypeInfo{}, fmt.Errorf("无效的IP地址: %s", ip)
+	}
+
+	// 创建具有超时控制的HTTP客户端
+	client := &http.Client{
+		Timeout: time.Duration(config.IPDetection.Timeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  false,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
 	url := fmt.Sprintf("https://ipinfo.io/%s/json?token=%s", ip, config.IPDetection.IPInfoToken)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return IPTypeInfo{}, err
+		if err.Error() == "context deadline exceeded" {
+			return IPTypeInfo{}, fmt.Errorf("请求超时")
+		}
+		return IPTypeInfo{}, fmt.Errorf("网络请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return IPTypeInfo{}, fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusNotFound: // 404
+			return IPTypeInfo{}, fmt.Errorf("IP地址不存在或API Token无效")
+		case http.StatusUnauthorized: // 401
+			return IPTypeInfo{}, fmt.Errorf("API Token无效或已过期")
+		case http.StatusForbidden: // 403
+			return IPTypeInfo{}, fmt.Errorf("API访问被拒绝，请检查配额")
+		case http.StatusTooManyRequests: // 429
+			return IPTypeInfo{}, fmt.Errorf("API请求频率超限，请稍后重试")
+		default:
+			return IPTypeInfo{}, fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+		}
 	}
 
 	var ipInfoResp IPInfoResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ipInfoResp); err != nil {
-		return IPTypeInfo{}, err
+		return IPTypeInfo{}, fmt.Errorf("解析JSON响应失败: %v", err)
 	}
 
 	// 解析IP类型
@@ -948,12 +1424,33 @@ func detectIPTypeWithIPInfo(ip string) (IPTypeInfo, error) {
 
 // detectIPTypeWithIPAPI 使用IPAPI.com检测IP类型
 func detectIPTypeWithIPAPI(ip string) (IPTypeInfo, error) {
-	client := &http.Client{Timeout: time.Duration(config.IPDetection.Timeout) * time.Second}
+	// 验证IP地址格式
+	if net.ParseIP(ip) == nil {
+		return IPTypeInfo{}, fmt.Errorf("无效的IP地址: %s", ip)
+	}
+
+	// 创建具有超时控制的HTTP客户端
+	client := &http.Client{
+		Timeout: time.Duration(config.IPDetection.Timeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  false,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
 	url := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query", ip)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return IPTypeInfo{}, err
+		if err.Error() == "context deadline exceeded" {
+			return IPTypeInfo{}, fmt.Errorf("请求超时")
+		}
+		return IPTypeInfo{}, fmt.Errorf("网络请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -963,10 +1460,13 @@ func detectIPTypeWithIPAPI(ip string) (IPTypeInfo, error) {
 
 	var ipapiResp IPTypeDetectionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ipapiResp); err != nil {
-		return IPTypeInfo{}, err
+		return IPTypeInfo{}, fmt.Errorf("解析JSON响应失败: %v", err)
 	}
 
 	if ipapiResp.Status != "success" {
+		if ipapiResp.Message == "invalid query" {
+			return IPTypeInfo{}, fmt.Errorf("无效的查询请求，IP地址格式可能不正确")
+		}
 		return IPTypeInfo{}, fmt.Errorf("API响应失败: %s", ipapiResp.Message)
 	}
 
@@ -987,7 +1487,25 @@ func detectIPTypeWithIPAPI(ip string) (IPTypeInfo, error) {
 
 // detectIPTypeWithIPApis 使用IPApis.com检测IP类型
 func detectIPTypeWithIPApis(ip string) (IPTypeInfo, error) {
-	client := &http.Client{Timeout: time.Duration(config.IPDetection.Timeout) * time.Second}
+	// 验证IP地址格式
+	if net.ParseIP(ip) == nil {
+		return IPTypeInfo{}, fmt.Errorf("无效的IP地址: %s", ip)
+	}
+
+	// 创建具有超时控制的HTTP客户端
+	client := &http.Client{
+		Timeout: time.Duration(config.IPDetection.Timeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  false,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
 	url := fmt.Sprintf("http://ipapis.com/%s", ip)
 
 	resp, err := client.Get(url)
@@ -1000,9 +1518,20 @@ func detectIPTypeWithIPApis(ip string) (IPTypeInfo, error) {
 		return IPTypeInfo{}, fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
 	}
 
+	// 检查响应内容类型
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		// 读取响应内容来检查是否是HTML页面
+		body, _ := io.ReadAll(resp.Body)
+		if strings.Contains(string(body), "<html>") {
+			return IPTypeInfo{}, fmt.Errorf("ipapis.com服务返回HTML页面而非JSON数据，可能服务不可用")
+		}
+		return IPTypeInfo{}, fmt.Errorf("响应内容类型不是JSON: %s", contentType)
+	}
+
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return IPTypeInfo{}, err
+		return IPTypeInfo{}, fmt.Errorf("解析JSON响应失败: %v", err)
 	}
 
 	// 提取相关信息
@@ -1030,44 +1559,119 @@ func detectIPTypeWithIPRegistry(ip string) (IPTypeInfo, error) {
 		return IPTypeInfo{}, fmt.Errorf("IPRegistry Key未配置")
 	}
 
-	client := &http.Client{Timeout: time.Duration(config.IPDetection.Timeout) * time.Second}
+	// 验证IP地址格式
+	if net.ParseIP(ip) == nil {
+		return IPTypeInfo{}, fmt.Errorf("无效的IP地址: %s", ip)
+	}
+
+	// 创建具有超时控制的HTTP客户端，针对ipregistry优化超时设置
+	client := &http.Client{
+		Timeout: time.Duration(config.IPDetection.Timeout) * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   15 * time.Second, // 增加连接超时
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:        10,
+			IdleConnTimeout:     30 * time.Second,
+			DisableCompression:  false,
+			TLSHandshakeTimeout: 15 * time.Second, // 增加TLS握手超时
+			ResponseHeaderTimeout: 20 * time.Second, // 增加响应头超时
+		},
+	}
 	url := fmt.Sprintf("https://api.ipregistry.co/%s?key=%s", ip, config.IPDetection.IPRegistryKey)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return IPTypeInfo{}, err
+		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
+			return IPTypeInfo{}, fmt.Errorf("连接超时 (网络或服务器问题)")
+		}
+		if strings.Contains(err.Error(), "connection refused") {
+			return IPTypeInfo{}, fmt.Errorf("连接被拒绝 (防火墙或网络问题)")
+		}
+		if strings.Contains(err.Error(), "no such host") {
+			return IPTypeInfo{}, fmt.Errorf("DNS解析失败 (网络问题)")
+		}
+		return IPTypeInfo{}, fmt.Errorf("网络请求失败: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusForbidden {
+			return IPTypeInfo{}, fmt.Errorf("API密钥无效或已过期")
+		}
 		return IPTypeInfo{}, fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
 	}
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return IPTypeInfo{}, err
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return IPTypeInfo{}, fmt.Errorf("读取响应失败: %v", err)
 	}
 
-	// 提取相关信息
-	if connection, ok := result["connection"].(map[string]interface{}); ok {
-		if organization, ok := connection["organization"].(string); ok {
-			// 解析IP类型
-			ipType := analyzeIPType(organization, "")
-			details := organization
-			if details == "" {
-				details = "未知组织"
-			}
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return IPTypeInfo{}, fmt.Errorf("解析JSON响应失败: %v", err)
+	}
 
-			return IPTypeInfo{
-				Type:    ipType,
-				Details: details,
-				Org:     organization,
-				ISP:     organization,
-			}, nil
+	// 检查API错误响应
+	if errorCode, ok := result["code"].(float64); ok {
+		if message, ok := result["message"].(string); ok {
+			return IPTypeInfo{}, fmt.Errorf("API错误 (代码: %.0f): %s", errorCode, message)
 		}
 	}
 
-	return IPTypeInfo{}, fmt.Errorf("无法解析IPRegistry响应")
+	// 提取相关信息
+	var org, isp, ipType string
+
+	// 尝试从connection字段获取信息
+	if connection, ok := result["connection"].(map[string]interface{}); ok {
+		if organization, ok := connection["organization"].(string); ok {
+			org = organization
+		}
+		if ispName, ok := connection["isp"].(string); ok {
+			isp = ispName
+		}
+		// 尝试获取类型信息
+		if connType, ok := connection["type"].(string); ok {
+			ipType = connType
+		}
+	}
+
+	// 尝试从carrier字段获取移动网络信息
+	if carrier, ok := result["carrier"].(map[string]interface{}); ok {
+		if name, ok := carrier["name"].(string); ok {
+			if isp == "" {
+				isp = name
+			}
+			ipType = "mobile" // 有carrier信息说明是移动网络
+		}
+	}
+
+	// 如果没有找到组织信息，尝试其他字段
+	if org == "" {
+		if company, ok := result["company"].(map[string]interface{}); ok {
+			if name, ok := company["name"].(string); ok {
+				org = name
+			}
+		}
+	}
+
+	// 解析IP类型
+	if ipType == "" {
+		ipType = analyzeIPType(org, "")
+	}
+
+	details := org
+	if details == "" {
+		details = "未知组织"
+	}
+
+	return IPTypeInfo{
+		Type:    ipType,
+		Details: details,
+		Org:     org,
+		ISP:     isp,
+	}, nil
 }
 
 // analyzeIPType 根据API返回的类型确定IP类型
@@ -1176,7 +1780,7 @@ func detectIPTypeBatch(ips []string) map[string]IPTypeInfo {
 		wg.Add(1)
 		go func(ipAddr string) {
 			defer wg.Done()
-			semaphore <- struct{}{} // 获取信号量
+			semaphore <- struct{}{}        // 获取信号量
 			defer func() { <-semaphore }() // 释放信号量
 
 			info := detectIPType(ipAddr)
@@ -1195,9 +1799,9 @@ func detectIPTypeBatch(ips []string) map[string]IPTypeInfo {
 
 // ProxyScore 代理评分结构体
 type ProxyScore struct {
-	Proxy   ProxyResult
-	Score   float64
-	Reason  string
+	Proxy  ProxyResult
+	Score  float64
+	Reason string
 }
 
 // calculateProxyScore 计算代理综合评分
@@ -1205,12 +1809,30 @@ func calculateProxyScore(proxy ProxyResult) ProxyScore {
 	score := 1000.0 // 基础分数
 	reason := "基础评分"
 
-	// 延迟评分（延迟越低分数越高）
-	latencyScore := 1000.0 / (proxy.Latency + 1) // 避免除零
-	score += latencyScore
-	reason += fmt.Sprintf(", 延迟加分: %.1f", latencyScore)
+	// 优化的延迟评分（更高的权重，非线性变换）
+	if proxy.Latency > 0 {
+		var latencyScore float64
+		switch {
+		case proxy.Latency <= 50: // 极佳延迟 < 50ms
+			latencyScore = 1000 - (proxy.Latency * 3) // 1000-850分
+			reason += fmt.Sprintf(", 极佳延迟%.1fms+%.1f", proxy.Latency, latencyScore)
+		case proxy.Latency <= 150: // 优秀延迟 50-150ms
+			latencyScore = 850 - ((proxy.Latency - 50) * 2.5) // 850-600分
+			reason += fmt.Sprintf(", 优秀延迟%.1fms+%.1f", proxy.Latency, latencyScore)
+		case proxy.Latency <= 300: // 良好延迟 150-300ms
+			latencyScore = 600 - ((proxy.Latency - 150) * 1.5) // 600-375分
+			reason += fmt.Sprintf(", 良好延迟%.1fms+%.1f", proxy.Latency, latencyScore)
+		case proxy.Latency <= 600: // 一般延迟 300-600ms
+			latencyScore = 375 - ((proxy.Latency - 300) * 0.8) // 375-135分
+			reason += fmt.Sprintf(", 一般延迟%.1fms+%.1f", proxy.Latency, latencyScore)
+		default: // 高延迟 > 600ms
+			latencyScore = math.Max(0, 135 - ((proxy.Latency - 600) * 0.2)) // 135-0分
+			reason += fmt.Sprintf(", 高延迟%.1fms+%.1f", proxy.Latency, latencyScore)
+		}
+		score += latencyScore
+	}
 
-	// IP类型评分
+	// IP类型评分（住宅IP优先）
 	switch proxy.IPType {
 	case "residential":
 		score += 500
@@ -1228,23 +1850,32 @@ func calculateProxyScore(proxy ProxyResult) ProxyScore {
 		reason += ", 未知类型 +0"
 	}
 
-	// 地理位置加分（中国IP额外加分）
+	// 地理位置加分（优先考虑特定地区）
 	if proxy.IPDetails == "CN" || strings.Contains(proxy.IPDetails, "中国") {
 		score += 100
 		reason += ", 中国IP +100"
+	} else if proxy.IPDetails == "US" || proxy.IPDetails == "HK" || proxy.IPDetails == "SG" {
+		score += 80
+		reason += fmt.Sprintf(", %sIP +80", proxy.IPDetails)
 	}
 
-	// 协议类型加分
+	// 协议类型加分（SOCKS5优先）
 	switch proxy.Protocol {
 	case "socks5_noauth", "socks5_auth":
-		score += 50
-		reason += ", SOCKS5 +50"
+		score += 150 // 提高SOCKS5权重
+		reason += ", SOCKS5 +150"
 	case "https":
-		score += 30
-		reason += ", HTTPS +30"
+		score += 80
+		reason += ", HTTPS +80"
 	case "http":
-		score += 20
-		reason += ", HTTP +20"
+		score += 50
+		reason += ", HTTP +50"
+	}
+
+	// 稳定性加分（根据URL特征）
+	if strings.Contains(proxy.URL, "ssl") || strings.Contains(proxy.URL, "secure") {
+		score += 60
+		reason += ", 安全连接 +60"
 	}
 
 	return ProxyScore{
@@ -1252,6 +1883,114 @@ func calculateProxyScore(proxy ProxyResult) ProxyScore {
 		Score:  score,
 		Reason: reason,
 	}
+}
+
+// checkAllPresetProxiesFailed 检查所有预设代理是否都已失效
+func checkAllPresetProxiesFailed() bool {
+	if len(config.Settings.PresetProxy) == 0 {
+		return true // 没有预设代理，需要更新
+	}
+
+	log.Println(ColorYellow + "🔍 检查当前预设代理状态..." + ColorReset)
+	failedCount := 0
+	totalCount := len(config.Settings.PresetProxy)
+
+	for i, proxyURL := range config.Settings.PresetProxy {
+		log.Printf("检测预设代理 %d/%d: %s\n", i+1, totalCount, proxyURL)
+
+		// 创建代理测试客户端
+		client, err := createTelegramClientWithProxy(proxyURL)
+		if err != nil {
+			log.Printf("❌ 预设代理 %s 不可用: %v\n", proxyURL, err)
+			failedCount++
+			continue
+		}
+
+		// 简单的API测试
+		testURL := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", config.Telegram.BotToken)
+		resp, err := client.Get(testURL)
+		if err != nil {
+			log.Printf("❌ 预设代理 %s 测试失败: %v\n", proxyURL, err)
+			failedCount++
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			log.Printf("✅ 预设代理 %s 工作正常\n", proxyURL)
+			return false // 发现一个可用的代理，不需要更新
+		} else {
+			log.Printf("❌ 预设代理 %s 返回错误: %d\n", proxyURL, resp.StatusCode)
+			failedCount++
+		}
+	}
+
+	failureRate := float64(failedCount) / float64(totalCount) * 100
+	log.Printf("📊 预设代理检测完成: %d/%d 失败 (%.1f%%)\n", failedCount, totalCount, failureRate)
+
+	// 只有当所有代理都失效时才返回true
+	return failedCount == totalCount
+}
+
+// selectBestSOCKS5Proxies 选择最优的SOCKS5代理列表
+func selectBestSOCKS5Proxies(validProxies []ProxyResult, maxCount int, preferResidential bool, maxLatency float64) []ProxyScore {
+	var scoredProxies []ProxyScore
+
+	log.Println(ColorCyan + "🎯 筛选SOCKS5代理并计算评分..." + ColorReset)
+
+	// 计算每个代理的评分，只筛选SOCKS5代理
+	for _, proxy := range validProxies {
+		// 检查是否为SOCKS5代理
+		if !strings.Contains(strings.ToLower(proxy.URL), "socks5") {
+			continue
+		}
+
+		// 检查延迟限制
+		if maxLatency > 0 && proxy.Latency > maxLatency {
+			log.Printf("⚠️ 代理 %s 延迟超限: %.2fms > %.2fms\n", proxy.URL, proxy.Latency, maxLatency)
+			continue
+		}
+
+		score := calculateProxyScore(proxy)
+
+		// 如果偏好住宅IP，给住宅IP额外加分
+		if preferResidential && proxy.IPType == "residential" {
+			score.Score += 200
+			score.Reason += ", 住宅IP偏好 +200"
+		}
+
+		// SOCKS5协议额外加分
+		score.Score += 100
+		score.Reason += ", SOCKS5协议 +100"
+
+		log.Printf("✅ SOCKS5代理 %s 评分: %.1f (延迟: %.2fms, 原因: %s)\n",
+			proxy.URL, score.Score, proxy.Latency, score.Reason)
+
+		scoredProxies = append(scoredProxies, score)
+	}
+
+	if len(scoredProxies) == 0 {
+		log.Println(ColorYellow + "⚠️ 没有找到符合条件的SOCKS5代理" + ColorReset)
+		return scoredProxies
+	}
+
+	// 按评分从高到低排序
+	sort.Slice(scoredProxies, func(i, j int) bool {
+		return scoredProxies[i].Score > scoredProxies[j].Score
+	})
+
+	// 返回前N个最优代理
+	if len(scoredProxies) > maxCount {
+		scoredProxies = scoredProxies[:maxCount]
+	}
+
+	log.Printf(ColorGreen + "🎉 选出 %d 个最优SOCKS5代理用于更新\n" + ColorReset, len(scoredProxies))
+	for i, proxy := range scoredProxies {
+		log.Printf("  %d. %s (评分: %.1f, 延迟: %.2fms)\n",
+			i+1, proxy.Proxy.URL, proxy.Score, proxy.Proxy.Latency)
+	}
+
+	return scoredProxies
 }
 
 // selectBestProxies 选择最优代理列表
@@ -1456,9 +2195,9 @@ func extractProxiesFromFile(dir string, maxGoRoutines int) chan *ProxyInfo {
 	reAuthSocks5 := regexp.MustCompile(`^([\d.]+):(\d+)\s*\|\s*([^|]*?):([^|]*?)\s*\|.*$`)
 
 	// 新增正则表达式
-	reIPPort := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)$`)                                    // 192.168.1.1:8080
-	reIPPortAuth := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)\s*:\s*([^:]+):([^:]+)$`)      // 192.168.1.1:8080:user:pass
-	reIPPortProtocol := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)\s*:\s*([a-zA-Z]+)$`)        // 192.168.1.1:8080:socks5
+	reIPPort := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)$`)                                                     // 192.168.1.1:8080
+	reIPPortAuth := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)\s*:\s*([^:]+):([^:]+)$`)                           // 192.168.1.1:8080:user:pass
+	reIPPortProtocol := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)\s*:\s*([a-zA-Z]+)$`)                           // 192.168.1.1:8080:socks5
 	reIPPortAuthProtocol := regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)\s*:\s*([^:]+):([^:]+)\s*:\s*([a-zA-Z]+)$`) // 192.168.1.1:8080:user:pass:socks5
 
 	// 支持空格分隔的格式
@@ -1493,8 +2232,8 @@ func extractProxiesFromFile(dir string, maxGoRoutines int) chan *ProxyInfo {
 	reIPv6Port := regexp.MustCompile(`^\[([0-9a-fA-F:]+)\]:(\d+)$`)
 	reIPv6PortAuth := regexp.MustCompile(`^\[([0-9a-fA-F:]+)\]:(\d+)\s*:\s*([^:]+):([^:]+)$`)
 
-	// 通用格式：host:port[:user:pass[:protocol]]
-	reGenericFormat := regexp.MustCompile(`^([^\s:]+(?:\[[0-9a-fA-F:]+\])?):(\d+)(?::([^:]*)(?::([^:]*))?(?::([^:]+))?)?$`)
+	// 通用格式：host:port[:user:pass[:protocol]] - 使用非贪婪匹配防止ReDoS
+	reGenericFormat := regexp.MustCompile(`^([^\s:]+(?:\[[0-9a-fA-F:]+\])?):(\d+)(?::([^:]*?)(?::([^:]*?))?(?::([^:]+?))?)?$`)
 
 	go func() {
 		defer close(proxiesChan)
@@ -1519,7 +2258,10 @@ func extractProxiesFromFile(dir string, maxGoRoutines int) chan *ProxyInfo {
 					defer f.Close()
 
 					scanner := bufio.NewScanner(f)
-					for scanner.Scan() {
+					lineCount := 0
+					maxLines := 100000 // 每个文件最多读取10万行，防止内存耗尽
+					for scanner.Scan() && lineCount < maxLines {
+						lineCount++
 						line := strings.TrimSpace(scanner.Text())
 						if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 							continue
@@ -1657,6 +2399,11 @@ func tryParseWithRegex(proxiesChan chan *ProxyInfo, line string,
 	reSpecialFormat3 *regexp.Regexp, reCommaSeparated *regexp.Regexp, reMixedFormat1 *regexp.Regexp,
 	reMixedFormat2 *regexp.Regexp, reSimpleHostPort *regexp.Regexp, reJSONFormat *regexp.Regexp,
 	reIPv6Port *regexp.Regexp, reIPv6PortAuth *regexp.Regexp, reGenericFormat *regexp.Regexp) bool {
+
+	// 防止超长行导致ReDoS攻击
+	if len(line) > 1000 {
+		return false
+	}
 
 	// 1. 旧格式：ip:port | user:pass |...
 	if matches := reAuthSocks5.FindStringSubmatch(line); len(matches) == 5 {
@@ -2052,9 +2799,9 @@ func tryParseOldFormat(proxiesChan chan *ProxyInfo, line string) bool {
 
 // NetworkClient 增强的网络客户端结构体
 type NetworkClient struct {
-	client    *http.Client
-	timeout   time.Duration
-	retries   int
+	client     *http.Client
+	timeout    time.Duration
+	retries    int
 	retryDelay time.Duration
 }
 
@@ -2120,68 +2867,40 @@ func isNetworkError(err error) bool {
 		strings.Contains(errStr, "connection aborted")
 }
 
-// createTelegramClientWithProxy 创建一个带代理的 HTTP 客户端用于 Telegram 通信（使用 aigo.go 的方式）
+// createTelegramClientWithProxy 创建一个带代理的 HTTP 客户端用于 Telegram 通信
 func createTelegramClientWithProxy(proxyURL string) (*http.Client, error) {
-	// 检查环境变量中的配置
-	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
-	chatID := os.Getenv("TELEGRAM_CHAT_ID")
-
-	// 如果环境变量存在，使用环境变量
-	if botToken != "" {
-		config.Telegram.BotToken = botToken
-	}
-	if chatID != "" {
-		config.Telegram.ChatID = chatID
-	}
-
-	if config.Telegram.BotToken == "" {
-		return nil, fmt.Errorf("Telegram Bot Token 未配置")
-	}
-
 	var transport *http.Transport
 	var err error
 
 	if proxyURL == "" {
-		log.Printf("🔍 使用直连方式创建Telegram客户端")
 		transport = &http.Transport{
 			DialContext: (&net.Dialer{
-				Timeout: 5 * time.Second, // 使用合理的连接超时
+				Timeout: 5 * time.Second,
 			}).DialContext,
 		}
 	} else {
-		log.Printf("🔍 使用代理创建Telegram客户端: %s", proxyURL)
-		transport, err = createTransportWithProxy(proxyURL) // 使用标准的传输创建
+		transport, err = createTransportWithProxy(proxyURL)
 		if err != nil {
-			log.Printf("❌ 创建代理传输失败: %v", err)
-			return nil, fmt.Errorf("创建代理传输失败: %v", err)
+			return nil, fmt.Errorf("代理验证失败: %v", err)
 		}
 	}
 
-	// 创建客户端，使用合理的超时
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second, // 使用合理的超时
+		Timeout:   60 * time.Second,
 	}
 
-	// 验证连接
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", config.Telegram.BotToken)
-	log.Printf("🔍 开始验证Telegram API连接")
-
-	resp, err := client.Get(apiURL)
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", config.Telegram.BotToken)
+	resp, err := client.Get(url)
 	if err != nil {
-		log.Printf("❌ Telegram API验证失败: %v", err)
 		return nil, fmt.Errorf("代理验证失败: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("❌ Telegram API返回错误，状态码: %d, 响应: %s", resp.StatusCode, string(body))
-		return nil, fmt.Errorf("代理验证失败，HTTP 状态码: %d", resp.StatusCode)
+		return nil, fmt.Errorf("代理验证失败，HTTP 状态码: %d, 响应: %s", resp.StatusCode, string(body))
 	}
-
-	log.Printf("✅ Telegram API验证成功")
-
 	return client, nil
 }
 
@@ -2195,97 +2914,100 @@ func getTelegramClient() *http.Client {
 		return telegramClientCache
 	}
 
-	// 清理过期的失效代理缓存（清理超过1小时的记录）
-	cleanExpiredFailedProxies()
-
 	var client *http.Client
 	var err error
 
-	// 遍历预设代理列表，跳过已知失效的代理
+	// 尝试通过预设代理连接 Telegram
 	for _, proxyURL := range config.Settings.PresetProxy {
-		// 检查是否在失效代理缓存中
-		failedProxiesMutex.RLock()
-		if failTime, exists := failedProxiesCache[proxyURL]; exists {
-			// 如果在30分钟内失败过，跳过这个代理
-			if time.Since(failTime) < 30*time.Minute {
-				failedProxiesMutex.RUnlock()
-				log.Printf("⏭️ 跳过最近失效的代理 %s (剩余冷却时间: %.1f分钟)\n",
-					proxyURL, (30*time.Minute-time.Since(failTime)).Minutes())
-				continue
-			}
-		}
-		failedProxiesMutex.RUnlock()
-
-		log.Printf("⏳ 尝试通过预设代理 %s 连接 Telegram API...\n", proxyURL)
+		log.Printf("⏳ 尝试代理 %s...\n", proxyURL)
 		client, err = createTelegramClientWithProxy(proxyURL)
 		if err == nil {
-			log.Printf("🟢 成功通过代理 %s 建立 Telegram 会话。\n", proxyURL)
+			log.Printf("🟢 成功通过代理建立 Telegram 会话。\n")
 			telegramClientCache = client // 缓存成功的客户端
-
-			// 从失效代理缓存中移除（如果之前存在）
-			failedProxiesMutex.Lock()
-			delete(failedProxiesCache, proxyURL)
-			failedProxiesMutex.Unlock()
-
 			return client
 		}
-
-		log.Printf("❌ 预设代理 %s 连接 Telegram 失败: %v\n", proxyURL, err)
-
-		// 将失效代理添加到缓存
-		failedProxiesMutex.Lock()
-		failedProxiesCache[proxyURL] = time.Now()
-		failedProxiesMutex.Unlock()
+		// 简洁显示：仅代理 URL + 失败原因，不打印详细 err（详细 err 已记录到文件日志）
+		log.Printf("❌ 代理 %s 验证失败\n", proxyURL)
 	}
 
-	log.Println("⏳ 所有预设代理均失败或已被跳过，尝试直连...")
+	// 如果所有代理都失败，尝试直连
+	log.Println("⏳ 尝试直连 Telegram API...")
 	client, err = createTelegramClientWithProxy("")
 	if err == nil {
 		log.Println("✅ 直连 Telegram API 成功。")
-		telegramClientCache = client // 缓存直连客户端
+		telegramClientCache = client
 		return client
 	}
+
 	log.Println("❌ 直连 Telegram API 失败，所有连接方式均失败。")
 	return nil
 }
 
-// sendSecureTelegramMessage 安全发送Telegram消息（使用 aigo.go 的方式）
-func sendSecureTelegramMessage(message string) bool {
+// escapeMarkdownV2Simple 简单的 MarkdownV2 转义函数
+func escapeMarkdownV2Simple(text string) string {
+	// 只转义必要的特殊字符，保持格式简单
+	var escaped bytes.Buffer
+	for _, r := range text {
+		switch r {
+		case '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!':
+			escaped.WriteRune('\\')
+			escaped.WriteRune(r)
+		default:
+			escaped.WriteRune(r)
+		}
+	}
+	return escaped.String()
+}
+
+// sendTelegramMessage 发送 Telegram 消息
+func sendTelegramMessage(message string) bool {
+	return sendTelegramMessageWithMode(message, "MarkdownV2")
+}
+
+// sendTelegramMessagePlain 发送纯文本 Telegram 消息
+func sendTelegramMessagePlain(message string) bool {
+	return sendTelegramMessageWithMode(message, "")
+}
+
+// sendTelegramMessageWithMode 使用指定模式发送消息
+func sendTelegramMessageWithMode(message, parseMode string) bool {
 	if config.Telegram.BotToken == "" || config.Telegram.ChatID == "" {
-		log.Println("❌ 未配置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，跳过 Telegram 通知")
+		log.Println("❌ Telegram 配置不完整，跳过消息发送")
 		return false
 	}
 
 	client := getTelegramClient()
 	if client == nil {
-		log.Println("❌ 无法建立网络连接，跳过 Telegram 消息发送。")
+		log.Println("❌ 无法建立 Telegram 连接，跳过消息发送")
 		return false
 	}
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", config.Telegram.BotToken)
-	payload := map[string]string{
-		"chat_id":    config.Telegram.ChatID,
-		"text":       message,
-		"parse_mode": "MarkdownV2",
+	payload := map[string]interface{}{
+		"chat_id": config.Telegram.ChatID,
+		"text":    message,
+	}
+
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 
 	jsonPayload, _ := json.Marshal(payload)
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonPayload))
 	if err != nil {
-		log.Printf("❌ Telegram 消息发送失败: %v\n", err)
-		// 如果发送失败，清除缓存客户端，以便下次重新验证
+		log.Println("❌ Telegram 消息发送失败")
+		// 清除缓存客户端
 		clientCacheMutex.Lock()
 		telegramClientCache = nil
 		clientCacheMutex.Unlock()
-		log.Println("⚠️ Telegram 客户端已失效，已清除缓存，下次将重新验证。")
 		return false
 	}
 	defer resp.Body.Close()
 
 	var apiResp telegramAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil || !apiResp.Ok {
-		log.Printf("❌ Telegram API 错误: %s\n", apiResp.Description)
-		// 如果API返回错误，清除缓存客户端
+		log.Println("❌ Telegram 消息发送失败: API 错误")
+		// 清除缓存客户端
 		clientCacheMutex.Lock()
 		telegramClientCache = nil
 		clientCacheMutex.Unlock()
@@ -2304,46 +3026,6 @@ func getProxyDescription(proxyURL string) string {
 	return proxyURL
 }
 
-// cleanExpiredFailedProxies 清理过期的失效代理缓存
-func cleanExpiredFailedProxies() {
-	failedProxiesMutex.Lock()
-	defer failedProxiesMutex.Unlock()
-
-	now := time.Now()
-	for proxyURL, failTime := range failedProxiesCache {
-		// 清理超过1小时的记录
-		if now.Sub(failTime) > time.Hour {
-			delete(failedProxiesCache, proxyURL)
-		}
-	}
-
-	// 可选：如果缓存过大，清理最旧的一些记录
-	maxCacheSize := 100
-	if len(failedProxiesCache) > maxCacheSize {
-		// 按时间排序，保留最新的记录
-		type proxyFail struct {
-			url  string
-			time time.Time
-		}
-		var fails []proxyFail
-		for url, t := range failedProxiesCache {
-			fails = append(fails, proxyFail{url: url, time: t})
-		}
-
-		// 按时间降序排序（最新的在前）
-		sort.Slice(fails, func(i, j int) bool {
-			return fails[i].time.After(fails[j].time)
-		})
-
-		// 清空缓存并重新添加最新的记录
-		failedProxiesCache = make(map[string]time.Time)
-		for i := 0; i < maxCacheSize && i < len(fails); i++ {
-			failedProxiesCache[fails[i].url] = fails[i].time
-		}
-
-		log.Printf("🧹 失效代理缓存过大，已清理保留最新的 %d 条记录\n", maxCacheSize)
-	}
-}
 
 // min 返回两个整数中的较小值
 func min(a, b int) int {
@@ -2353,87 +3035,6 @@ func min(a, b int) int {
 	return b
 }
 
-// createUltraOptimizedTransportWithProxy 创建超优化的代理传输（彻底解决超时问题）
-func createUltraOptimizedTransportWithProxy(proxyURL string) (*http.Transport, error) {
-	parsedURL, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-
-	// 极短的拨号器超时，彻底解决卡死问题
-	dialer := &net.Dialer{
-		Timeout: 800 * time.Millisecond, // 0.8秒超时
-	}
-
-	switch parsedURL.Scheme {
-	case "http":
-		// HTTP代理处理
-		proxyFunc := http.ProxyURL(parsedURL)
-		return &http.Transport{
-			Proxy:       proxyFunc,
-			DialContext: dialer.DialContext,
-		}, nil
-	case "https":
-		// HTTPS代理 - 使用CONNECT隧道方式
-		proxyFunc := http.ProxyURL(parsedURL)
-		return &http.Transport{
-			Proxy:             proxyFunc,
-			DialContext:       dialer.DialContext,
-			ForceAttemptHTTP2: false,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-				MinVersion:         tls.VersionTLS12,
-			},
-		}, nil
-	case "socks5", "socks5h":
-		// SOCKS5代理 - 超激进优化配置
-		var auth *proxy.Auth
-		if parsedURL.User != nil {
-			password, _ := parsedURL.User.Password()
-			auth = &proxy.Auth{
-				User:     parsedURL.User.Username(),
-				Password: password,
-			}
-		}
-
-		socks5Dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, dialer)
-		if err != nil {
-			return nil, err
-		}
-
-		return &http.Transport{
-			DialContext: socks5Dialer.(proxy.ContextDialer).DialContext,
-			// 最激进的TLS配置
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-				MinVersion:         tls.VersionTLS12,
-				MaxVersion:         tls.VersionTLS12, // 强制TLS 1.2
-				ServerName:         "", // 跳过SNI检查
-			},
-			// 彻底禁用HTTP/2
-			ForceAttemptHTTP2: false,
-			// 添加更多优化参数
-			DisableKeepAlives:    false, // 保持连接
-			DisableCompression:    false, // 允许压缩
-		}, nil
-	case "socks4":
-		var auth *proxy.Auth
-		if parsedURL.User != nil {
-			auth = &proxy.Auth{User: parsedURL.User.Username()}
-		}
-
-		socks4Dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, dialer)
-		if err != nil {
-			return nil, err
-		}
-
-		return &http.Transport{
-			DialContext: socks4Dialer.(proxy.ContextDialer).DialContext,
-		}, nil
-	default:
-		return nil, fmt.Errorf("不支持的协议: %s", parsedURL.Scheme)
-	}
-}
 
 // loadSecureConfig 安全加载配置（支持环境变量）
 func loadSecureConfig(configPath string) error {
@@ -2473,40 +3074,171 @@ func loadSecureConfig(configPath string) error {
 }
 
 // 主函数
-func main() {
+// Application 应用程序结构体
+type Application struct {
+	config     *Config
+	logger     *Logger
+	geoIPMgr   *GeoIPManager
+	workerPool *WorkerPool
+}
+
+// NewApplication 创建新的应用程序实例
+func NewApplication() (*Application, error) {
+	app := &Application{}
+
+	// 初始化日志系统
+	logLevel := LogLevelInfo
+	enableDebug := os.Getenv("DEBUG") == "true"
+
+	logger, err := NewLogger(logLevel, "check_log.txt", enableDebug)
+	if err != nil {
+		return nil, fmt.Errorf("初始化日志系统失败: %w", err)
+	}
+	app.logger = logger
+
+	// 加载配置
+	if err := app.loadConfiguration("config.ini"); err != nil {
+		return nil, fmt.Errorf("配置加载失败: %w", err)
+	}
+
+	// 初始化GeoIP管理器
+	app.geoIPMgr = &GeoIPManager{}
+	if err := app.initializeGeoIP(); err != nil {
+		app.logger.Warn("GeoIP初始化失败，将跳过地理位置检测", err)
+	}
+
+	// 初始化工作池
+	app.workerPool = NewWorkerPool(app.config.Settings.MaxConcurrent)
+
+	return app, nil
+}
+
+// loadConfiguration 加载和验证配置
+func (app *Application) loadConfiguration(configPath string) error {
 	// 设置日志格式
 	log.SetFlags(0)
 	var err error
 	logFile, err = os.OpenFile("check_log.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		log.Fatalf("❌ 无法打开日志文件: %v", err)
+		return fmt.Errorf("无法打开日志文件: %w", err)
 	}
-	defer logFile.Close()
 	log.SetOutput(&LogWriter{})
 
 	// 安全加载配置
-	if err := loadSecureConfig("config.ini"); err != nil {
-		log.Fatalf("❌ 配置加载失败: %v", err)
+	if err := loadSecureConfig(configPath); err != nil {
+		return fmt.Errorf("配置加载失败: %w", err)
 	}
 
-	// 设置默认值
-	if config.Settings.CheckTimeout <= 0 {
-		config.Settings.CheckTimeout = 15
-		log.Printf("⚠️ 未设置检测超时，使用默认值: %d 秒\n", config.Settings.CheckTimeout)
-	}
-	if config.Settings.MaxConcurrent <= 0 {
-		config.Settings.MaxConcurrent = 50
-		log.Printf("⚠️ 未设置最大并发数，使用默认值: %d\n", config.Settings.MaxConcurrent)
-	}
-	if config.Settings.FdipDir == "" {
-		config.Settings.FdipDir = "FDIP"
-		log.Printf("⚠️ 未设置代理目录，使用默认值: %s\n", config.Settings.FdipDir)
-	}
-	if config.Settings.OutputDir == "" {
-		config.Settings.OutputDir = "OUTPUT"
-		log.Printf("⚠️ 未设置输出目录，使用默认值: %s\n", config.Settings.OutputDir)
+	app.config = &config
+
+	// 设置和验证默认值
+	app.setConfigurationDefaults()
+
+	// 验证配置
+	if err := app.validateConfiguration(); err != nil {
+		return fmt.Errorf("配置验证失败: %w", err)
 	}
 
+	return nil
+}
+
+// setConfigurationDefaults 设置配置默认值
+func (app *Application) setConfigurationDefaults() {
+	defaultsSet := false
+
+	if app.config.Settings.CheckTimeout <= 0 {
+		app.config.Settings.CheckTimeout = 15
+		app.logger.Info("设置默认检测超时", map[string]interface{}{
+			"timeout_seconds": app.config.Settings.CheckTimeout,
+		})
+		defaultsSet = true
+	}
+
+	if app.config.Settings.MaxConcurrent <= 0 {
+		app.config.Settings.MaxConcurrent = 50
+		app.logger.Info("设置默认最大并发数", map[string]interface{}{
+			"max_concurrent": app.config.Settings.MaxConcurrent,
+		})
+		defaultsSet = true
+	}
+
+	if app.config.Settings.FdipDir == "" {
+		app.config.Settings.FdipDir = "FDIP"
+		app.logger.Info("设置默认代理目录", map[string]interface{}{
+			"directory": app.config.Settings.FdipDir,
+		})
+		defaultsSet = true
+	}
+
+	if app.config.Settings.OutputDir == "" {
+		app.config.Settings.OutputDir = "OUTPUT"
+		app.logger.Info("设置默认输出目录", map[string]interface{}{
+			"directory": app.config.Settings.OutputDir,
+		})
+		defaultsSet = true
+	}
+
+	if defaultsSet {
+		app.logger.Warn("使用了默认配置值", nil)
+	}
+}
+
+// validateConfiguration 验证配置
+func (app *Application) validateConfiguration() error {
+	// 验证目录是否存在，不存在则创建
+	dirs := []string{
+		app.config.Settings.FdipDir,
+		app.config.Settings.OutputDir,
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("创建目录 %s 失败: %w", dir, err)
+		}
+	}
+
+	// 验证超时设置
+	if app.config.Settings.CheckTimeout > 300 {
+		app.logger.Warn("检测超时设置过大，建议不超过300秒", nil)
+	}
+
+	// 验证并发设置
+	if app.config.Settings.MaxConcurrent > 1000 {
+		app.logger.Warn("最大并发数设置过大，可能影响系统性能", nil)
+	}
+
+	return nil
+}
+
+// initializeGeoIP 初始化GeoIP数据库
+func (app *Application) initializeGeoIP() error {
+	if !app.config.IPDetection.Enabled {
+		app.logger.Info("IP地理位置检测已禁用")
+		return nil
+	}
+
+	dbPath := "GeoLite2-Country.mmdb"
+
+	// 检查数据库文件是否存在
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		app.logger.Info("GeoIP数据库不存在，尝试下载", map[string]interface{}{
+			"database_path": dbPath,
+		})
+
+		if !downloadGeoIPDatabase(dbPath) {
+			return fmt.Errorf("下载GeoIP数据库失败")
+		}
+	}
+
+	// 初始化GeoIP读取器
+	initGeoIPReader()
+
+	app.logger.Info("GeoIP数据库初始化成功")
+	return nil
+}
+
+// displayStartupInfo 显示启动信息
+func (app *Application) displayStartupInfo() {
 	// 获取终端宽度
 	width, _, err := terminal.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
@@ -2515,34 +3247,114 @@ func main() {
 
 	DrawCenteredTitleBox(ColorYellow+"   代 理 检 测 工 具 v2.0 (增强版)   "+ColorReset, width)
 
-	log.Println(ColorGreen + "✅ 配置加载成功！" + ColorReset)
-	if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
-		log.Println(ColorCyan + "- Telegram 机器人已就绪。" + ColorReset)
+	app.logger.Info("应用程序启动成功", map[string]interface{}{
+		"version": "v2.0 (增强版)",
+		"debug":   os.Getenv("DEBUG") == "true",
+	})
+
+	if app.config.Telegram.BotToken != "" && app.config.Telegram.ChatID != "" {
+		app.logger.Info("Telegram机器人已配置", nil)
 	} else {
-		log.Println(ColorYellow + "- Telegram 配置不完整，将跳过通知。" + ColorReset)
+		app.logger.Warn("Telegram配置不完整，将跳过通知", nil)
 	}
 
-	if len(config.Settings.PresetProxy) > 0 {
-		log.Printf(ColorCyan+"- 已加载 %d 个预设代理。\n", len(config.Settings.PresetProxy))
+	if len(app.config.Settings.PresetProxy) > 0 {
+		app.logger.Info("预设代理已加载", map[string]interface{}{
+			"count": len(app.config.Settings.PresetProxy),
+		})
 	} else {
-		log.Println(ColorYellow + "- 没有预设代理，将使用直连方式。" + ColorReset)
+		app.logger.Info("未配置预设代理，将使用直连方式", nil)
 	}
 
-	log.Printf(ColorCyan+"- 检测超时设置为 %d 秒，最大并发数 %d。\n", config.Settings.CheckTimeout, config.Settings.MaxConcurrent)
-	log.Println(ColorCyan + "- 已启用网络重试机制和错误处理优化。" + ColorReset)
-	log.Println(ColorCyan + "------------------------------------------" + ColorReset)
+	app.logger.Info("配置摘要", map[string]interface{}{
+		"check_timeout":  app.config.Settings.CheckTimeout,
+		"max_concurrent": app.config.Settings.MaxConcurrent,
+		"ip_detection":   app.config.IPDetection.Enabled,
+		"auto_update":    app.config.AutoProxyUpdate.Enabled,
+	})
+}
 
+// Run 运行应用程序
+func (app *Application) Run() error {
+	defer app.cleanup()
+
+	// 显示启动信息
+	app.displayStartupInfo()
+
+	// 显示主菜单
 	showMenu()
+
+	return nil
+}
+
+// cleanup 清理资源
+func (app *Application) cleanup() {
+	app.logger.Info("正在清理资源...")
+
+	// 关闭GeoIP读取器
+	closeGeoIPReader()
+
+	// 停止工作池
+	if app.workerPool != nil {
+		app.workerPool.Stop()
+	}
+
+	// 关闭日志记录器
+	if app.logger != nil {
+		app.logger.Close()
+	}
+
+	if logFile != nil {
+		logFile.Close()
+	}
+}
+
+func main() {
+	// 创建应用程序实例
+	app, err := NewApplication()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 应用程序初始化失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 运行应用程序
+	if err := app.Run(); err != nil {
+		app.logger.Fatal("应用程序运行失败", err)
+		os.Exit(1)
+	}
 }
 
 // showMenu 显示主菜单并处理用户输入
 func showMenu() {
 	for {
-		fmt.Println(ColorYellow + "\n--- 请选择一个操作 ---" + ColorReset)
-		fmt.Println("1. 🚀 " + ColorGreen + "开始代理检测" + ColorReset)
-		fmt.Println("2. 🌐 " + ColorBlue + "更新 GeoIP 数据库" + ColorReset)
-		fmt.Println("3. ❌ " + ColorRed + "退出" + ColorReset)
-		fmt.Print("请输入您的选择 (1/2/3): ")
+		// 清屏（可选）
+		clearScreen()
+
+		// 显示程序标题和版本信息
+		fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
+		fmt.Println(ColorCyan + "║" + ColorGreen + "               🚀 IP 代理检测工具 v2.0" + ColorReset + ColorCyan + "                    ║" + ColorReset)
+		fmt.Println(ColorCyan + "║" + ColorYellow + "                Enhanced Proxy Checker Tool" + ColorReset + ColorCyan + "                ║" + ColorReset)
+		fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
+		fmt.Println()
+
+		// 显示系统状态信息
+		displaySystemStatus()
+
+		// 显示菜单选项
+		fmt.Println(ColorYellow + "┌─────────────────────── 主菜单 ───────────────────────┐" + ColorReset)
+		fmt.Println("│ " + ColorGreen + "1. 🔍 开始代理检测" + ColorReset + "                                   │")
+		fmt.Println("│ " + ColorBlue + "2. 🌐 更新 GeoIP 数据库" + ColorReset + "                            │")
+		fmt.Println("│ " + ColorCyan + "3. ⚙️  配置设置" + ColorReset + "                                       │")
+		fmt.Println("│ " + ColorMagenta + "4. 📊 查看统计信息" + ColorReset + "                                 │")
+		fmt.Println("│ " + ColorYellow + "5. 🧪 测试网络连接" + ColorReset + "                                 │")
+		fmt.Println("│ " + ColorRed + "6. ❌ 退出程序" + ColorReset + "                                       │")
+		fmt.Println(ColorYellow + "└─────────────────────────────────────────────────┘" + ColorReset)
+		fmt.Println()
+
+		// 显示配置状态
+		displayConfigStatus()
+
+		fmt.Print(ColorGreen + "请输入您的选择 (1-6): " + ColorReset)
 
 		reader := bufio.NewReader(os.Stdin)
 		input, _ := reader.ReadString('\n')
@@ -2552,35 +3364,21 @@ func showMenu() {
 		case "1":
 			runEnhancedCheck()
 		case "2":
-			log.Println("----------- GeoIP 数据库更新 -----------")
-			if _, err := os.Stat(GEOIP_DB_PATH); err == nil && isGeoIPFileValid(GEOIP_DB_PATH) {
-				log.Printf("✅ 本地 GeoIP 数据库已存在且有效: %s\n", GEOIP_DB_PATH)
-				fileInfo, _ := os.Stat(GEOIP_DB_PATH)
-				mtime := fileInfo.ModTime()
-				ageDays := time.Since(mtime).Hours() / 24
-				if ageDays < 7 {
-					log.Printf("ℹ️ 数据库较新 (%.1f 天)，无需更新。\n", ageDays)
-					log.Println("------------------------------------------")
-				} else {
-					log.Printf("⚠️ 数据库较旧 (%.1f 天)，将强制更新。\n", ageDays)
-					log.Println("------------------------------------------")
-					downloadGeoIPDatabase(GEOIP_DB_PATH)
-				}
-			} else {
-				if err == nil {
-					log.Printf("⚠️ 本地 GeoIP 数据库无效，将重新下载。\n")
-					os.Remove(GEOIP_DB_PATH)
-				} else {
-					log.Printf("ℹ️ 本地 GeoIP 数据库不存在，将下载最新文件。\n")
-				}
-				log.Println("------------------------------------------")
-				downloadGeoIPDatabase(GEOIP_DB_PATH)
-			}
+			updateGeoIPDatabase()
 		case "3":
-			fmt.Println("👋 退出程序。")
+			showConfigMenu()
+		case "4":
+			showStatistics()
+		case "5":
+			testNetworkConnection()
+		case "6":
+			fmt.Println(ColorGreen + "👋 感谢使用 IP 代理检测工具！" + ColorReset)
+			fmt.Println(ColorYellow + "程序正在退出..." + ColorReset)
+			time.Sleep(1 * time.Second)
 			return
 		default:
-			fmt.Println(ColorRed + "⚠️ 无效的选择，请重新输入。" + ColorReset)
+			fmt.Println(ColorRed + "\n⚠️ 无效的选择，请输入 1-6 之间的数字。" + ColorReset)
+			time.Sleep(2 * time.Second)
 		}
 	}
 }
@@ -2594,11 +3392,18 @@ func runEnhancedCheck() {
 
 	// 发送启动通知
 	if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
-		message := "*🚀 代理检测工具启动 \\(增强版\\)*"
-		if sendSecureTelegramMessage(message) {
-			log.Println("✅ 启动通知发送成功")
-		} else {
-			log.Println("❌ 启动通知发送失败，但程序将继续运行")
+		message := "*🚀 代理检测工具启动*"
+		maxRetries := 3
+		for i := 0; i < maxRetries; i++ {
+			if sendTelegramMessage(message) {
+				break
+			}
+			if i < maxRetries-1 {
+				log.Printf("❌ Telegram 启动消息发送失败 (第 %d 次)，5秒后重试...", i+1)
+				time.Sleep(5 * time.Second)
+			} else {
+				log.Println("❌ Telegram 启动消息发送失败，但程序将继续运行。")
+			}
 		}
 	} else {
 		log.Println(ColorYellow + "❌ 未配置 Telegram Bot Token 或 Chat ID，跳过 Telegram 通知。" + ColorReset)
@@ -2612,7 +3417,7 @@ func runEnhancedCheck() {
 	fdipPath := filepath.Join(".", config.Settings.FdipDir)
 	if _, err := os.Stat(fdipPath); os.IsNotExist(err) {
 		log.Printf(ColorRed+"❌ 目录不存在: %s\n"+ColorReset, fdipPath)
-		sendSecureTelegramMessage(escapeMarkdownV2("❌ 错误: 目录 `"+config.Settings.FdipDir+"` 不存在"))
+		sendTelegramMessage(escapeMarkdownV2("❌ 错误: 目录 `" + config.Settings.FdipDir + "` 不存在"))
 		return
 	}
 
@@ -2633,7 +3438,7 @@ func runEnhancedCheck() {
 
 	if len(uniqueProxies) == 0 {
 		log.Println(ColorYellow + "⚠️ 未提取到任何代理，退出" + ColorReset)
-		sendSecureTelegramMessage(escapeMarkdownV2("⚠️ *代理检测完成*\n没有提取到任何代理"))
+		sendTelegramMessage(escapeMarkdownV2("⚠️ *代理检测完成*\n没有提取到任何代理"))
 		return
 	}
 
@@ -2707,7 +3512,7 @@ func runEnhancedCheck() {
 
 	if len(validProxies) == 0 {
 		log.Println(ColorYellow + "⚠️ 没有检测到可用代理" + ColorReset)
-		sendSecureTelegramMessage(escapeMarkdownV2("⚠️ *代理检测完成*\n没有检测到任何可用代理"))
+		sendTelegramMessage(escapeMarkdownV2("⚠️ *代理检测完成*\n没有检测到任何可用代理"))
 		return
 	}
 
@@ -2742,54 +3547,61 @@ func runEnhancedCheck() {
 	// 生成统计报告
 	generateEnhancedReport(validProxies, failedProxiesStats, start)
 
-	// 自动更新Telegram预设代理列表
+	// 自动更新Telegram预设代理列表（优化：只有当全部预设代理失效时才更新）
 	if config.AutoProxyUpdate.Enabled && len(validProxies) > 0 {
-		log.Println(ColorCyan + "\n🔄 正在自动更新Telegram预设代理列表..." + ColorReset)
+		log.Println(ColorCyan + "\n🔄 检查是否需要更新Telegram预设代理列表..." + ColorReset)
 
-		// 记录更新前的状态
-		originalProxyCount := len(config.Settings.PresetProxy)
-		log.Printf("📋 更新前预设代理数量: %d\n", originalProxyCount)
+		// 检查当前预设代理是否全部失效
+		if !checkAllPresetProxiesFailed() {
+			log.Println(ColorGreen + "✅ 当前预设代理中有可用的代理，跳过自动更新" + ColorReset)
+		} else {
+			log.Println(ColorYellow + "⚠️ 所有预设代理都已失效，开始自动更新..." + ColorReset)
 
-		// 选择最优代理
-		bestProxies := selectBestProxies(
-			validProxies,
-			config.AutoProxyUpdate.MaxProxies,
-			config.AutoProxyUpdate.PreferResidential,
-			config.AutoProxyUpdate.MaxLatency,
-		)
+			// 记录更新前的状态
+			originalProxyCount := len(config.Settings.PresetProxy)
+			log.Printf("📋 更新前预设代理数量: %d\n", originalProxyCount)
 
-		if len(bestProxies) > 0 {
-			log.Printf("🎯 选出 %d 个最优代理用于更新\n", len(bestProxies))
+			// 选择最优SOCKS5代理
+			bestProxies := selectBestSOCKS5Proxies(
+				validProxies,
+				config.AutoProxyUpdate.MaxProxies,
+				config.AutoProxyUpdate.PreferResidential,
+				config.AutoProxyUpdate.MaxLatency,
+			)
 
-			// 更新配置文件
-			updateStart := time.Now()
-			if err := updateConfigPresetProxies(bestProxies); err != nil {
-				log.Printf(ColorRed+"❌ 自动更新预设代理失败: %v\n"+ColorReset, err)
+			if len(bestProxies) > 0 {
+				log.Printf("🎯 选出 %d 个最优SOCKS5代理用于更新\n", len(bestProxies))
 
-				// 发送失败通知
-				if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
-					failureMsg := fmt.Sprintf("❌ *代理自动更新失败*\n错误: `%s`\n耗时: `%.2f`秒",
-						escapeMarkdownV2(err.Error()), time.Since(updateStart).Seconds())
-					sendSecureTelegramMessage(failureMsg)
+				// 更新配置文件
+				updateStart := time.Now()
+				if err := updateConfigPresetProxies(bestProxies); err != nil {
+					log.Printf(ColorRed+"❌ 自动更新预设代理失败: %v\n"+ColorReset, err)
+
+					// 发送失败通知
+					if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
+						failureMsg := fmt.Sprintf("❌ *SOCKS5代理自动更新失败*\n错误: `%s`\n耗时: `%.2f`秒",
+							escapeMarkdownV2(err.Error()), time.Since(updateStart).Seconds())
+						sendTelegramMessage(failureMsg)
+					}
+				} else {
+					updateDuration := time.Since(updateStart)
+					log.Printf(ColorGreen+"✅ Telegram预设代理列表自动更新完成！耗时: %.2f秒\n"+ColorReset, updateDuration.Seconds())
+
+					// 发送成功通知
+					if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
+						successMsg := fmt.Sprintf("✅ *SOCKS5代理自动更新成功*\n更新代理数: `%d`\n耗时: `%.2f`秒\n*筛选条件: SOCKS5协议, 延迟<%.2fms*",
+							len(bestProxies), updateDuration.Seconds(), config.AutoProxyUpdate.MaxLatency)
+						sendTelegramMessage(successMsg)
+					}
 				}
 			} else {
-				updateDuration := time.Since(updateStart)
-				log.Printf(ColorGreen+"✅ Telegram预设代理列表自动更新完成！耗时: %.2f秒\n"+ColorReset, updateDuration.Seconds())
+				log.Println(ColorYellow + "⚠️ 没有找到符合条件的SOCKS5代理来更新预设列表" + ColorReset)
 
-				// 发送成功通知
+				// 发送警告通知
 				if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
-					successMsg := fmt.Sprintf("✅ *代理自动更新成功*\n更新代理数: `%d`\n耗时: `%.2f`秒",
-						len(bestProxies), updateDuration.Seconds())
-					sendSecureTelegramMessage(successMsg)
+					warningMsg := "⚠️ *SOCKS5代理自动更新警告*\n没有找到符合条件的SOCKS5代理\n可能原因:\n• 延迟超限 \\(>" + fmt.Sprintf("%.0fms", config.AutoProxyUpdate.MaxLatency) + "\\)\n• 非SOCKS5协议\n• 代理测试失败"
+					sendTelegramMessage(warningMsg)
 				}
-			}
-		} else {
-			log.Println(ColorYellow + "⚠️ 没有找到符合条件的代理来更新预设列表" + ColorReset)
-
-			// 发送警告通知
-			if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
-				warningMsg := "⚠️ *代理自动更新警告*\n没有找到符合条件的代理\n可能原因:\n• 延迟超限\n• 协议不支持\n• 代理测试失败"
-				sendSecureTelegramMessage(warningMsg)
 			}
 		}
 	} else {
@@ -2797,6 +3609,81 @@ func runEnhancedCheck() {
 			log.Println(ColorCyan + "ℹ️ 自动更新功能已禁用，跳过预设代理更新" + ColorReset)
 		} else {
 			log.Println(ColorYellow + "⚠️ 没有有效代理，跳过预设代理更新" + ColorReset)
+		}
+	}
+
+	// 发送代理检测报告到 Telegram
+	if len(validProxies) > 0 {
+		log.Println(ColorCyan + "\n📤 正在发送代理检测报告..." + ColorReset)
+
+		// 生成检测报告消息（纯文本格式）
+		var messageParts []string
+		messageParts = append(messageParts, "🎉 代理检测报告")
+		messageParts = append(messageParts, fmt.Sprintf("⏰ 耗时: %.2f 秒", time.Since(start).Seconds()))
+		messageParts = append(messageParts, fmt.Sprintf("✅ 有效代理: %d 个", len(validProxies)))
+
+		// 统计协议分布
+		protocolDistribution := make(map[string]int)
+		countryDistribution := make(map[string]int)
+		for _, p := range validProxies {
+			protocolDistribution[p.Protocol]++
+			countryDistribution[p.IPDetails]++
+		}
+
+		if len(protocolDistribution) > 0 {
+			messageParts = append(messageParts, "\n🌐 协议分布:")
+			for proto, count := range protocolDistribution {
+				messageParts = append(messageParts, fmt.Sprintf("  - %s: %d 个", proto, count))
+			}
+		}
+
+		if len(countryDistribution) > 0 {
+			messageParts = append(messageParts, "\n🌍 国家分布:")
+			// 按数量降序排序
+			type countryStat struct {
+				code  string
+				count int
+			}
+			var sortedCountries []countryStat
+			for country, count := range countryDistribution {
+				sortedCountries = append(sortedCountries, countryStat{country, count})
+			}
+			sort.Slice(sortedCountries, func(i, j int) bool {
+				return sortedCountries[i].count > sortedCountries[j].count
+			})
+
+			for _, stat := range sortedCountries {
+				country := stat.code
+				count := stat.count
+				flag := COUNTRY_FLAG_MAP[country]
+				countryName := COUNTRY_CODE_TO_NAME[country]
+				if flag == "" {
+					flag = "🌐"
+				}
+				if countryName == "" {
+					countryName = "未知"
+				}
+				messageParts = append(messageParts, fmt.Sprintf("  - %s %s (%s): %d 个", flag, countryName, country, count))
+			}
+		}
+
+		finalMessage := strings.Join(messageParts, "\n")
+
+		// 发送检测报告（使用纯文本格式避免 Markdown 问题）
+		if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
+			maxRetries := 3
+			for i := 0; i < maxRetries; i++ {
+				if sendTelegramMessagePlain(finalMessage) {
+					log.Println("✅ 检测报告推送成功")
+					break
+				}
+				if i < maxRetries-1 {
+					log.Printf("❌ 检测报告推送失败 (第 %d 次)，5秒后重试...", i+1)
+					time.Sleep(5 * time.Second)
+				} else {
+					log.Println("❌ 检测报告推送失败，但程序将继续运行。")
+				}
+			}
 		}
 	}
 
@@ -2821,7 +3708,7 @@ func runEnhancedCheck() {
 
 	// 发送结束通知
 	if config.Telegram.BotToken != "" && config.Telegram.ChatID != "" {
-		sendSecureTelegramMessage("*🎉 程序运行结束*")
+		sendTelegramMessage("*🎉 程序运行结束*")
 	}
 
 	log.Println(ColorGreen + "\033[1m🎉 程序运行结束！\033[0m" + ColorReset)
@@ -2939,108 +3826,8 @@ func generateEnhancedReport(validProxies []ProxyResult, failedProxiesStats map[s
 		}
 	}
 
-	// 发送Telegram报告
-	sendTelegramReport(validProxies, failedProxiesStats, start, protocolDistribution, countryDistribution, ipTypeDistribution, latencies)
-}
-
-// sendTelegramReport 发送Telegram报告
-func sendTelegramReport(validProxies []ProxyResult, failedProxiesStats map[string]int, start time.Time,
-	protocolDistribution map[string]int, countryDistribution map[string]int,
-	ipTypeDistribution map[string]int, latencies []float64) {
-
-	totalValidCount := len(validProxies)
-	var messageParts []string
-
-	messageParts = append(messageParts, "*🎉 代理检测报告 (增强版)*")
-	messageParts = append(messageParts, fmt.Sprintf("⏰ 耗时: `%.2f` 秒", time.Since(start).Seconds()))
-	messageParts = append(messageParts, fmt.Sprintf("✅ 有效代理: `%d` 个", totalValidCount))
-
-	// 协议分布
-	if len(protocolDistribution) > 0 {
-		messageParts = append(messageParts, "\n*🌐 协议分布*:")
-		var sortedProtocols []string
-		for proto := range protocolDistribution {
-			sortedProtocols = append(sortedProtocols, proto)
-		}
-		sort.Strings(sortedProtocols)
-		for _, proto := range sortedProtocols {
-			messageParts = append(messageParts, fmt.Sprintf("  - `%s`: `%d` 个", proto, protocolDistribution[proto]))
-		}
 	}
 
-	// 国家分布
-	if len(countryDistribution) > 0 {
-		messageParts = append(messageParts, "\n*🌍 国家分布*:")
-		var sortedCountries []string
-		for country := range countryDistribution {
-			sortedCountries = append(sortedCountries, country)
-		}
-		sort.Strings(sortedCountries)
-		for _, countryCode := range sortedCountries {
-			flag := COUNTRY_FLAG_MAP[countryCode]
-			countryName := COUNTRY_CODE_TO_NAME[countryCode]
-			messageParts = append(messageParts, fmt.Sprintf("  - %s %s: `%d` 个", flag, countryName, countryDistribution[countryCode]))
-		}
-	}
-
-	// IP类型分布
-	if len(ipTypeDistribution) > 0 {
-		messageParts = append(messageParts, "\n*🏷️ IP类型分布*:")
-		var sortedTypes []string
-		for ipType := range ipTypeDistribution {
-			sortedTypes = append(sortedTypes, ipType)
-		}
-		sort.Strings(sortedTypes)
-		for _, ipType := range sortedTypes {
-			icon := IP_TYPE_MAP[ipType]
-			if icon == "" {
-				icon = IP_TYPE_MAP["unknown"]
-			}
-			desc := IP_TYPE_DESCRIPTION[ipType]
-			if desc == "" {
-				desc = IP_TYPE_DESCRIPTION["unknown"]
-			}
-			messageParts = append(messageParts, fmt.Sprintf("  - %s %s: `%d` 个", icon, desc, ipTypeDistribution[ipType]))
-		}
-	}
-
-	// 延迟统计
-	if len(latencies) > 0 {
-		sort.Float64s(latencies)
-		minLatency := latencies[0]
-		maxLatency := latencies[len(latencies)-1]
-		var sum float64
-		for _, l := range latencies {
-			sum += l
-		}
-		avgLatency := sum / float64(len(latencies))
-
-		messageParts = append(messageParts, "\n*📈 延迟统计*:")
-		messageParts = append(messageParts, fmt.Sprintf("  - 均值: `%.2f`ms", avgLatency))
-		messageParts = append(messageParts, fmt.Sprintf("  - 最低: `%.2f`ms", minLatency))
-		messageParts = append(messageParts, fmt.Sprintf("  - 最高: `%.2f`ms", maxLatency))
-	}
-
-	// 失败原因
-	if len(failedProxiesStats) > 0 {
-		messageParts = append(messageParts, "\n*⚠️ 检测失败原因*:")
-		var reasons []string
-		for reason := range failedProxiesStats {
-			reasons = append(reasons, reason)
-		}
-		sort.Slice(reasons, func(i, j int) bool {
-			return failedProxiesStats[reasons[i]] > failedProxiesStats[reasons[j]]
-		})
-		for _, reason := range reasons {
-			messageParts = append(messageParts, fmt.Sprintf("  - `%s`: `%d` 个", reason, failedProxiesStats[reason]))
-		}
-	}
-
-	finalTelegramMessage := strings.Join(messageParts, "\n")
-	finalTelegramMessage = escapeMarkdownV2(finalTelegramMessage)
-
-	sendSecureTelegramMessage(finalTelegramMessage)
-}
 
 // removeDuplicateProxies 移除重复的代理
 func removeDuplicateProxies(proxies []*ProxyInfo) []*ProxyInfo {
@@ -3060,48 +3847,99 @@ func removeDuplicateProxies(proxies []*ProxyInfo) []*ProxyInfo {
 }
 
 // createTransportWithProxy 创建一个带代理的 http.Transport (从原始代码复制)
+// TransportConfig 传输层配置
+type TransportConfig struct {
+	ConnectTimeout         time.Duration
+	ResponseHeaderTimeout  time.Duration
+	ExpectContinueTimeout  time.Duration
+	MaxIdleConns          int
+	MaxIdleConnsPerHost   int
+	IdleConnTimeout       time.Duration
+	TLSHandshakeTimeout   time.Duration
+	DisableKeepAlives     bool
+	InsecureSkipVerify    bool
+}
+
+// DefaultTransportConfig 返回默认的传输层配置
+func DefaultTransportConfig() *TransportConfig {
+	return &TransportConfig{
+		ConnectTimeout:        15 * time.Second,        // 增加连接超时：10s → 15s
+		ResponseHeaderTimeout: 45 * time.Second,        // 增加响应头超时：30s → 45s (优化Telegram API连接)
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:         100,
+		MaxIdleConnsPerHost:  10,
+		IdleConnTimeout:      90 * time.Second,
+		TLSHandshakeTimeout:  25 * time.Second,        // 增加TLS握手超时：10s → 25s
+		DisableKeepAlives:    false,
+		InsecureSkipVerify:   true,
+	}
+}
+
+
+// createTransportWithProxy 创建优化的带代理HTTP传输层
 func createTransportWithProxy(proxyURL string) (*http.Transport, error) {
 	parsedURL, err := url.Parse(proxyURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("无效的代理URL: %w", err)
 	}
 
+	config := DefaultTransportConfig()
+
 	dialer := &net.Dialer{
-		Timeout: 5 * time.Second,
+		Timeout:   config.ConnectTimeout,
+		KeepAlive: 30 * time.Second,
+	}
+
+	// 基础传输层配置
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:         config.MaxIdleConns,
+		MaxIdleConnsPerHost:  config.MaxIdleConnsPerHost,
+		IdleConnTimeout:      config.IdleConnTimeout,
+		TLSHandshakeTimeout:  config.TLSHandshakeTimeout,
+		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
+		ExpectContinueTimeout: config.ExpectContinueTimeout,
+		DisableKeepAlives:    config.DisableKeepAlives,
+		ForceAttemptHTTP2:    false, // 避免HTTP/2干扰代理连接
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: config.InsecureSkipVerify,
+			MinVersion:         tls.VersionTLS12,
+		},
 	}
 
 	switch parsedURL.Scheme {
 	case "http":
 		// HTTP代理处理
-		proxyFunc := http.ProxyURL(parsedURL)
-		return &http.Transport{
-			Proxy:       proxyFunc,
-			DialContext: dialer.DialContext,
-		}, nil
+		transport.Proxy = http.ProxyURL(parsedURL)
+		return transport, nil
+
 	case "https":
 		// HTTPS代理 - 使用CONNECT隧道方式
-		proxyFunc := http.ProxyURL(parsedURL)
-		return &http.Transport{
-			Proxy:             proxyFunc,
-			DialContext:       dialer.DialContext,
-			ForceAttemptHTTP2: false, // 避免HTTP/2干扰代理连接
-			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, // 跳过证书验证以避免证书问题
-		}, nil
+		transport.Proxy = http.ProxyURL(parsedURL)
+		return transport, nil
+
 	case "socks5", "socks5h":
 		var auth *proxy.Auth
 		if parsedURL.User != nil {
 			password, _ := parsedURL.User.Password()
-			auth = &proxy.Auth{User: parsedURL.User.Username(), Password: password}
+			auth = &proxy.Auth{
+				User:     parsedURL.User.Username(),
+				Password: password,
+			}
 		}
 
 		socks5Dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, dialer)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("创建SOCKS5拨号器失败: %w", err)
 		}
 
-		return &http.Transport{
-			DialContext: socks5Dialer.(proxy.ContextDialer).DialContext,
-		}, nil
+		if contextDialer, ok := socks5Dialer.(proxy.ContextDialer); ok {
+			transport.DialContext = contextDialer.DialContext
+		} else {
+			return nil, fmt.Errorf("SOCKS5拨号器不支持上下文拨号")
+		}
+		return transport, nil
+
 	case "socks4":
 		var auth *proxy.Auth
 		if parsedURL.User != nil {
@@ -3110,17 +3948,35 @@ func createTransportWithProxy(proxyURL string) (*http.Transport, error) {
 
 		socks4Dialer, err := proxy.SOCKS5("tcp", parsedURL.Host, auth, dialer)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("创建SOCKS4拨号器失败: %w", err)
 		}
 
-		return &http.Transport{
-			DialContext: socks4Dialer.(proxy.ContextDialer).DialContext,
-		}, nil
+		if contextDialer, ok := socks4Dialer.(proxy.ContextDialer); ok {
+			transport.DialContext = contextDialer.DialContext
+		} else {
+			return nil, fmt.Errorf("SOCKS4拨号器不支持上下文拨号")
+		}
+		return transport, nil
+
 	default:
-		return nil, fmt.Errorf("不支持的协议: %s", parsedURL.Scheme)
+		return nil, fmt.Errorf("不支持的代理协议: %s", parsedURL.Scheme)
 	}
 }
 
+// createOptimizedHTTPClient 创建优化的HTTP客户端
+func createOptimizedHTTPClient(transport *http.Transport, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// 限制重定向次数，避免无限重定向
+			if len(via) >= 3 {
+				return fmt.Errorf("stopped after 3 redirects")
+			}
+			return nil
+		},
+	}
+}
 
 // escapeMarkdownV2 对字符串进行转义以符合MarkdownV2规范 (从原始代码复制)
 func escapeMarkdownV2(text string) string {
@@ -3137,80 +3993,186 @@ func escapeMarkdownV2(text string) string {
 	return escaped.String()
 }
 
-// runProxyTests 并发测试代理 (从原始代码复制)
-func runProxyTests(proxiesChan chan *ProxyInfo) chan ProxyResult {
-	resultsChan := make(chan ProxyResult)
-	var wg sync.WaitGroup
+// WorkerPool 工作池结构体
+type WorkerPool struct {
+	maxWorkers   int
+	taskChan     chan *ProxyInfo
+	resultChan   chan ProxyResult
+	wg           sync.WaitGroup
+	ctx          context.Context
+	cancel       context.CancelFunc
+	activeCount  int64
+	activeMutex  sync.RWMutex
+}
 
-	// 启动 worker goroutine
-	for i := 0; i < config.Settings.MaxConcurrent; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for p := range proxiesChan {
-				result := testProxy(context.Background(), p)
-				resultsChan <- result
-			}
-		}()
+// NewWorkerPool 创建新的工作池
+func NewWorkerPool(maxWorkers int) *WorkerPool {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &WorkerPool{
+		maxWorkers: maxWorkers,
+		taskChan:   make(chan *ProxyInfo, maxWorkers*2), // 带缓冲的任务通道
+		resultChan: make(chan ProxyResult, maxWorkers),   // 带缓冲的结果通道
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+}
+
+// Start 启动工作池
+func (wp *WorkerPool) Start() {
+	for i := 0; i < wp.maxWorkers; i++ {
+		wp.wg.Add(1)
+		go wp.worker(i)
 	}
 
-	// 启动一个 goroutine 来关闭结果通道
+	// 启动结果收集器
+	go wp.resultCollector()
+}
+
+// worker 工作函数
+func (wp *WorkerPool) worker(id int) {
+	defer wp.wg.Done()
+
+	for {
+		select {
+		case <-wp.ctx.Done():
+			return
+		case task, ok := <-wp.taskChan:
+			if !ok {
+				return
+			}
+
+			// 增加活跃计数
+			wp.activeMutex.Lock()
+			wp.activeCount++
+			wp.activeMutex.Unlock()
+
+			// 执行任务
+			result := testProxy(wp.ctx, task)
+
+			// 减少活跃计数
+			wp.activeMutex.Lock()
+			wp.activeCount--
+			wp.activeMutex.Unlock()
+
+			// 发送结果
+			select {
+			case wp.resultChan <- result:
+			case <-wp.ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// resultCollector 结果收集器
+func (wp *WorkerPool) resultCollector() {
+	wp.wg.Wait()
+	close(wp.resultChan)
+	wp.cancel()
+}
+
+// Submit 提交任务
+func (wp *WorkerPool) Submit(task *ProxyInfo) bool {
+	select {
+	case wp.taskChan <- task:
+		return true
+	case <-wp.ctx.Done():
+		return false
+	}
+}
+
+// GetActiveCount 获取当前活跃的工作协程数
+func (wp *WorkerPool) GetActiveCount() int {
+	wp.activeMutex.RLock()
+	defer wp.activeMutex.RUnlock()
+	return int(wp.activeCount)
+}
+
+// Stop 停止工作池
+func (wp *WorkerPool) Stop() {
+	wp.cancel()
+	wp.wg.Wait()
+}
+
+// GetResults 获取结果通道
+func (wp *WorkerPool) GetResults() <-chan ProxyResult {
+	return wp.resultChan
+}
+
+// Close 关闭任务通道
+func (wp *WorkerPool) Close() {
+	close(wp.taskChan)
+}
+
+// runProxyTests 并发测试代理 (优化版本)
+func runProxyTests(proxiesChan <-chan *ProxyInfo) chan ProxyResult {
+	// 创建工作池
+	pool := NewWorkerPool(config.Settings.MaxConcurrent)
+	pool.Start()
+
+	// 启动一个goroutine来分发任务
 	go func() {
-		wg.Wait()
-		close(resultsChan)
+		defer pool.Close()
+
+		for proxy := range proxiesChan {
+			if !pool.Submit(proxy) {
+				// 如果无法提交任务，说明context已取消
+				break
+			}
+		}
+	}()
+
+	// 创建结果通道
+	resultsChan := make(chan ProxyResult, pool.maxWorkers)
+
+	// 启动goroutine来转发结果
+	go func() {
+		defer close(resultsChan)
+		for result := range pool.GetResults() {
+			select {
+			case resultsChan <- result:
+			default:
+				// 如果结果通道满了，记录警告
+				if logger != nil {
+					logger.Warn("结果通道已满，丢弃结果", nil)
+				}
+			}
+		}
 	}()
 
 	return resultsChan
 }
 
-// testProxy 测试单个代理的有效性 (从原始代码复制)
-func testProxy(ctx context.Context, proxyInfo *ProxyInfo) ProxyResult {
-	start := time.Now()
-	_, err := url.Parse(proxyInfo.URL)
-	if err != nil {
-		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("URL解析错误: %v", err)}
+// ProxyError 定义代理错误的类型
+type ProxyError struct {
+	Type    string
+	Message string
+	Err     error
+}
+
+func (e *ProxyError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Err)
 	}
+	return e.Message
+}
 
-	var transport *http.Transport
-	transport, err = createTransportWithProxy(proxyInfo.URL)
-	if err != nil {
-		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("创建代理客户端失败: %v", err)}
-	}
+// isHTMLResponse 检查响应是否为HTML
+func isHTMLResponse(bodyStr string) bool {
+	return strings.Contains(bodyStr, "<!doctype html>") ||
+		   strings.Contains(bodyStr, "<html") ||
+		   strings.Contains(bodyStr, "<head>") ||
+		   strings.Contains(bodyStr, "<title>")
+}
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   time.Duration(config.Settings.CheckTimeout) * time.Second,
-	}
-
-	// 根据代理协议选择合适的测试URL
-	testURL := selectTestURL(proxyInfo.Protocol)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
-	if err != nil {
-		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("创建请求失败: %v", err)}
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("网络错误: %v", err)}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("HTTP Status: %d", resp.StatusCode)}
-	}
-
-	latency := time.Since(start).Seconds() * 1000 // 转换为毫秒
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("读取响应失败: %v", err)}
-	}
-
+// extractIPFromResponse 从响应体中提取IP地址
+func extractIPFromResponse(body []byte) (string, error) {
 	// 解析JSON响应获取IP地址
 	var ipResponse struct {
 		Origin string `json:"origin"`
 		IP     string `json:"ip"`
 	}
+
 	ipAddr := ""
 	if err := json.Unmarshal(body, &ipResponse); err != nil {
 		// 如果JSON解析失败，尝试直接使用响应内容
@@ -3224,6 +4186,199 @@ func testProxy(ctx context.Context, proxyInfo *ProxyInfo) ProxyResult {
 		}
 	}
 
+	// 处理多个IP的情况 - httpbin.org有时返回逗号分隔的IP列表
+	if ipAddr != "" {
+		// 如果包含多个IP（逗号分隔），只取第一个IP
+		if strings.Contains(ipAddr, ",") {
+			ips := strings.Split(ipAddr, ",")
+			if len(ips) > 0 {
+				// 取第一个非空IP并去除空格
+				ipAddr = strings.TrimSpace(ips[0])
+			}
+		}
+	}
+
+	return ipAddr, nil
+}
+
+// detectIPTypeForProxy 为代理检测IP类型的简化版本
+func detectIPTypeForProxy(ipAddr string) string {
+	if ipAddr == "" {
+		return "unknown"
+	}
+
+	// 基本的IP类型检测逻辑
+	ip := net.ParseIP(ipAddr)
+	if ip == nil {
+		return "invalid"
+	}
+
+	// 检查是否为私有IP
+	if ip.IsPrivate() {
+		return "private"
+	}
+
+	// 检查是否为本地回环
+	if ip.IsLoopback() {
+		return "loopback"
+	}
+
+	// 默认返回公网IP
+	return "public"
+}
+
+// ErrorType 常量定义
+const (
+	ErrorTypeNetwork     = "network"
+	ErrorTypeAuth        = "auth"
+	ErrorTypeTimeout     = "timeout"
+	ErrorTypeParsing     = "parsing"
+	ErrorTypeHTTP        = "http"
+	ErrorTypeTLS         = "tls"
+	ErrorTypeConnection  = "connection"
+	ErrorTypeContent     = "content"
+)
+
+// ClassifyError 分类错误类型
+func ClassifyError(err error) *ProxyError {
+	if err == nil {
+		return nil
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// 代理认证错误
+	if strings.Contains(errStr, "407") || strings.Contains(errStr, "proxy authentication required") {
+		return &ProxyError{Type: ErrorTypeAuth, Message: "代理需要认证 (407)", Err: err}
+	}
+
+	// 超时错误
+	if strings.Contains(errStr, "context deadline exceeded") || strings.Contains(errStr, "timeout") {
+		return &ProxyError{Type: ErrorTypeTimeout, Message: "I/O超时", Err: err}
+	}
+
+	// 连接相关错误
+	if strings.Contains(errStr, "connection refused") {
+		return &ProxyError{Type: ErrorTypeConnection, Message: "连接被拒绝", Err: err}
+	}
+	if strings.Contains(errStr, "no such host") {
+		return &ProxyError{Type: ErrorTypeConnection, Message: "主机不存在", Err: err}
+	}
+	if strings.Contains(errStr, "connection reset") {
+		return &ProxyError{Type: ErrorTypeConnection, Message: "连接中断", Err: err}
+	}
+
+	// TLS/SSL错误
+	if strings.Contains(errStr, "tls handshake") || strings.Contains(errStr, "ssl") {
+		return &ProxyError{Type: ErrorTypeTLS, Message: "TLS/SSL握手失败", Err: err}
+	}
+
+	// TCP错误
+	if strings.Contains(errStr, "tcp") {
+		return &ProxyError{Type: ErrorTypeNetwork, Message: "连接失败 (TCP)", Err: err}
+	}
+
+	// 默认网络错误
+	return &ProxyError{Type: ErrorTypeNetwork, Message: "网络错误", Err: err}
+}
+
+// ClassifyHTTPError 分类HTTP状态码错误
+func ClassifyHTTPError(statusCode int) *ProxyError {
+	switch statusCode {
+	case http.StatusProxyAuthRequired: // 407
+		return &ProxyError{Type: ErrorTypeAuth, Message: "客户端错误 (407)", Err: nil}
+	case http.StatusGatewayTimeout: // 504
+		return &ProxyError{Type: ErrorTypeTimeout, Message: "网关超时 (504)", Err: nil}
+	case http.StatusBadGateway: // 502
+		return &ProxyError{Type: ErrorTypeHTTP, Message: "服务器错误 (502)", Err: nil}
+	default:
+		if statusCode >= 400 && statusCode < 500 {
+			return &ProxyError{Type: ErrorTypeHTTP, Message: fmt.Sprintf("客户端错误 (%d)", statusCode), Err: nil}
+		} else if statusCode >= 500 && statusCode < 600 {
+			return &ProxyError{Type: ErrorTypeHTTP, Message: fmt.Sprintf("服务器错误 (%d)", statusCode), Err: nil}
+		}
+		return &ProxyError{Type: ErrorTypeHTTP, Message: fmt.Sprintf("HTTP Status: %d", statusCode), Err: nil}
+	}
+}
+
+// testProxy 测试单个代理的有效性 (优化版本)
+func testProxy(ctx context.Context, proxyInfo *ProxyInfo) ProxyResult {
+	start := time.Now()
+
+	// 解析URL
+	_, err := url.Parse(proxyInfo.URL)
+	if err != nil {
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("URL解析错误: %v", err)}
+	}
+
+	// 创建优化的传输层
+	transport, err := createTransportWithProxy(proxyInfo.URL)
+	if err != nil {
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("创建代理客户端失败: %v", err)}
+	}
+
+	// 创建优化的HTTP客户端
+	client := createOptimizedHTTPClient(transport, time.Duration(config.Settings.CheckTimeout)*time.Second)
+
+	// 设置请求超时上下文
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(config.Settings.CheckTimeout)*time.Second)
+	defer cancel()
+
+	// 选择测试URL
+	testURL := selectTestURL(proxyInfo.Protocol)
+
+	// 创建请求，添加User-Agent头
+	req, err := http.NewRequestWithContext(reqCtx, "GET", testURL, nil)
+	if err != nil {
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("创建请求失败: %v", err)}
+	}
+
+	// 设置请求头
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+
+	// 执行请求
+	resp, err := client.Do(req)
+	if err != nil {
+		proxyErr := ClassifyError(err)
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: proxyErr.Error()}
+	}
+	defer resp.Body.Close()
+
+	// 检查HTTP状态码
+	if resp.StatusCode != http.StatusOK {
+		proxyErr := ClassifyHTTPError(resp.StatusCode)
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: proxyErr.Error()}
+	}
+
+	// 计算延迟
+	latency := time.Since(start).Seconds() * 1000 // 转换为毫秒
+
+	// 限制读取响应体的最大大小
+	limitedReader := io.LimitReader(resp.Body, 1024*1024) // 1MB限制
+	body, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("读取响应失败: %v", err)}
+	}
+
+	// 检查响应内容
+	bodyStr := strings.ToLower(string(body))
+	if isHTMLResponse(bodyStr) {
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: "返回HTML错误页面"}
+	}
+
+	// 解析JSON响应获取IP地址
+	ipAddr, err := extractIPFromResponse(body)
+	if err != nil {
+		if isHTMLResponse(bodyStr) {
+			return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: "返回非JSON格式响应"}
+		}
+		return ProxyResult{URL: proxyInfo.URL, Success: false, Reason: fmt.Sprintf("解析响应失败: %v", err)}
+	}
+
 	// 检测IP类型
 	var ipType, ipDetails string
 	if ipAddr != "" && config.IPDetection.Enabled {
@@ -3235,11 +4390,10 @@ func testProxy(ctx context.Context, proxyInfo *ProxyInfo) ProxyResult {
 		ipDetails = "未检测"
 	}
 
-	// 获取国家代码并存储在IPDetails中（如果GeoIP可用）
+	// 获取国家代码（如果GeoIP可用）
 	if ipAddr != "" && geoIPManager.reader != nil {
 		countryCode := getCountryFromIP(ipAddr)
 		if countryCode != "" {
-			// 保存国家代码到IPDetails字段，覆盖IP类型检测的详细信息
 			ipDetails = countryCode
 		}
 	}
@@ -3440,43 +4594,32 @@ func writeResidentialFile(fileName string, residentialProxies []ProxyResult, isT
 	log.Printf("💾 已写入 %d 个住宅IP到文件: %s\n", len(residentialProxies), fullPath)
 }
 
-// sendTelegramFile 发送 Telegram 文件（使用 aigo.go 的方式）
+// sendTelegramFile 发送 Telegram 文件
 func sendTelegramFile(filePath string) bool {
-	// 检查Telegram配置
 	if config.Telegram.BotToken == "" || config.Telegram.ChatID == "" {
 		log.Println("❌ 未配置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，跳过 Telegram 文件通知")
 		return false
 	}
 
-	// 检查文件是否存在
-	fileInfo, err := os.Stat(filePath)
-	if os.IsNotExist(err) {
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		log.Printf("ℹ️ 文件 %s 不存在，跳过推送。\n", filepath.Base(filePath))
 		return false
 	}
-	if err != nil {
-		log.Printf("❌ 检查文件 %s 失败: %v\n", filePath, err)
-		return false
-	}
+	fileInfo, _ := os.Stat(filePath)
 	if fileInfo.Size() == 0 {
-		log.Printf("ℹ️ 文件 %s 为空 (%d 字节)，跳过推送。\n", filepath.Base(filePath), fileInfo.Size())
+		log.Printf("ℹ️ 文件 %s 不存在或为空，跳过推送。\n", filepath.Base(filePath))
 		os.Remove(filePath)
 		return false
 	}
 
-	log.Printf("📄 准备发送文件: %s (%.2f MB)\n", filepath.Base(filePath), float64(fileInfo.Size())/1024/1024)
-
-	// 获取Telegram客户端
 	client := getTelegramClient()
 	if client == nil {
 		log.Println("❌ 无法建立网络连接，跳过 Telegram 文件发送。")
 		return false
 	}
 
-	// 构建请求
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", config.Telegram.BotToken)
 
-	// 打开文件
 	file, err := os.Open(filePath)
 	if err != nil {
 		log.Printf("❌ 无法打开文件 %s: %v\n", filePath, err)
@@ -3484,38 +4627,21 @@ func sendTelegramFile(filePath string) bool {
 	}
 	defer file.Close()
 
-	// 创建multipart表单
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-
-	// 添加文件字段
 	part, err := writer.CreateFormFile("document", filepath.Base(filePath))
 	if err != nil {
 		log.Printf("❌ 创建 multipart 表单文件失败: %v\n", err)
 		return false
 	}
-
-	// 复制文件内容
-	copied, err := io.Copy(part, file)
+	_, err = io.Copy(part, file)
 	if err != nil {
 		log.Printf("❌ 复制文件到表单失败: %v\n", err)
 		return false
 	}
-	log.Printf("📋 文件内容已复制到表单 (%d 字节)\n", copied)
+	writer.WriteField("chat_id", config.Telegram.ChatID)
+	writer.Close()
 
-	// 添加chat_id字段
-	if err := writer.WriteField("chat_id", config.Telegram.ChatID); err != nil {
-		log.Printf("❌ 添加 chat_id 字段失败: %v\n", err)
-		return false
-	}
-
-	// 关闭writer
-	if err := writer.Close(); err != nil {
-		log.Printf("❌ 关闭 multipart writer 失败: %v\n", err)
-		return false
-	}
-
-	// 创建HTTP请求
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
 		log.Printf("❌ 创建 HTTP 请求失败: %v\n", err)
@@ -3523,12 +4649,9 @@ func sendTelegramFile(filePath string) bool {
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	log.Printf("📤 正在发送文件到 Telegram...")
-
-	// 发送请求
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("❌ 文件 %s 发送失败: %v\n", filepath.Base(filePath), err)
+		log.Printf("❌ 文件 %s 发送失败\n", filePath)
 		// 如果发送失败，清除缓存客户端
 		clientCacheMutex.Lock()
 		telegramClientCache = nil
@@ -3538,18 +4661,8 @@ func sendTelegramFile(filePath string) bool {
 	}
 	defer resp.Body.Close()
 
-	// 检查响应
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	log.Printf("📨 Telegram API 响应状态: %d\n", resp.StatusCode)
-
 	var apiResp telegramAPIResponse
-	if err := json.Unmarshal(bodyBytes, &apiResp); err != nil {
-		log.Printf("❌ 解析 Telegram API 响应失败: %v\n", err)
-		log.Printf("📨 原始响应: %s\n", string(bodyBytes))
-		return false
-	}
-
-	if !apiResp.Ok {
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil || !apiResp.Ok {
 		log.Printf("❌ Telegram API 错误: %s\n", apiResp.Description)
 		// 如果API返回错误，清除缓存客户端
 		clientCacheMutex.Lock()
@@ -3558,7 +4671,7 @@ func sendTelegramFile(filePath string) bool {
 		return false
 	}
 
-	log.Printf("✅ 文件 %s 已成功推送到 Telegram。\n", filepath.Base(filePath))
+	log.Printf("✅ 文件 %s 已成功推送。\n", filepath.Base(filePath))
 	return true
 }
 
@@ -3601,3 +4714,5 @@ func quickNetworkTest(proxyURL string) bool {
 
 	return resp.StatusCode == http.StatusOK
 }
+
+
