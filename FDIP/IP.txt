@@ -90,7 +90,6 @@
 206.223.183.13:443:https | : | In/Out: Canada-Ontario Toronto[住宅IP] | Status: ✅
 72.137.245.164:443:https | : | In/Out: Canada-Ontario Toronto[住宅IP] | Status: ✅
 185.133.105.38:443:https | : | In/Out: Germany-Bavaria Coburg[住宅IP] | Status: ✅
-
 185.31.213.2:443:https | : | In/Out: Austria-Vorarlberg Feldkirch[住宅IP] | Status: ✅
 79.175.131.5:85:http | : | In/Out: Iran-Tehran[住宅IP] | Status: ✅
 179.49.158.72:8800:http | : | In/Out: Peru-Lima[住宅IP] | Status: ✅
@@ -178,6 +177,5 @@
 72.234.228.56:37777:http | : | In/Out: United States-Hawaii Honolulu[住宅IP] | Status: ✅
 113.176.100.249:8881:http | : | In/Out: Vietnam-Da Nang City Da Nang[住宅IP] | Status: ✅
 14.241.133.178:8877:http | : | In/Out: Vietnam-Da Nang City Điện Bàn[住宅IP] | Status: ✅
-
 45.115.114.41:2379:http | : | In/Out: Bangladesh-Dhaka Division Dhaka[住宅IP] | Status: ✅
 38.191.248.252:81:http | : | In/Out: Armenia-Yerevan[商企IP] | Dc: Likenet llc | Status: ✅
