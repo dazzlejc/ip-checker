@@ -33,42 +33,6 @@
 117.52.17.203:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
 117.52.17.140:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
 117.52.17.220:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.172:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.196:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.18.176:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.148:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.161:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-182.162.17.25:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.18.203:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.163:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.103:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.153:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.169:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.17.200:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.18.154:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-117.52.18.152:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-38.47.127.9:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-211.174.59.206:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-182.162.18.175:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-182.162.18.244:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-211.174.59.203:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-38.47.127.7:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-182.162.17.157:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-211.233.81.244:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-182.162.17.195:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-185.44.211.60:8880 | : | In/Out: Austria-Oberösterreich Gmunden[住宅IP] | Status: ✅
-211.174.59.232:5555 | 123:123 | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-38.47.109.88:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.127.16:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.126.64:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.127.11:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.127.81:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.179.85.200:20000 | 1:1 | In/Out: United States-Arizona Phoenix[住宅IP] | Status: ✅
-38.47.127.142:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.126.242:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.109.122:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-38.47.126.109:5555 | socks5:socks5 | In/Out: Japan-Tokyo To Tokyo[住宅IP] | Status: ✅
-206.237.120.83:5555 | socks5:socks5 | In/Out: Japan-Hyogo Ken Kobe[住宅IP] | Status: ✅
 101.47.182.177:20000 | : | In/Out: Singapore-Singapore[商企IP] | Dc: Byteplus | Status: ✅
 159.65.128.194:1080 | : | In/Out: Singapore-Singapore[商企IP] | Dc: Digitalocean | Status: ✅
 35.154.252.188:1188 | : | In/Out: India-Maharashtra Mumbai[商企IP] | Dc: Amazon aws | Status: ✅
@@ -126,65 +90,8 @@
 206.223.183.13:443:https | : | In/Out: Canada-Ontario Toronto[住宅IP] | Status: ✅
 72.137.245.164:443:https | : | In/Out: Canada-Ontario Toronto[住宅IP] | Status: ✅
 185.133.105.38:443:https | : | In/Out: Germany-Bavaria Coburg[住宅IP] | Status: ✅
-160.16.242.66:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-161.34.34.133:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-115.114.148.119:443:https | : | In/Out: India-Maharashtra Pune[住宅IP] | Status: ✅
-76.212.81.35:8080:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-131.161.227.180:443:https | : | In/Out: Brazil-Ceara Fortaleza[住宅IP] | Status: ✅
-115.133.236.116:8009:https | : | In/Out: Malaysia-Kuala Lumpur[住宅IP] | Status: ✅
-160.16.205.26:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-87.212.180.240:443:https | : | In/Out: The Netherlands-Utrecht[住宅IP] | Status: ✅
-178.119.231.20:443:https | : | In/Out: Belgium-Vlaanderen Gent[住宅IP] | Status: ✅
-160.16.69.119:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-139.162.54.31:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-165.85.146.19:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-173.179.202.233:443:https | : | In/Out: Canada-Quebec Montréal[住宅IP] | Status: ✅
-160.16.228.246:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-49.212.172.225:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-203.12.10.135:443:https | : | In/Out: Australia-Tasmania Hobart[住宅IP] | Status: ✅
-178.115.238.253:443:https | : | In/Out: Austria-Steiermark Graz[住宅IP] | Status: ✅
-91.86.168.39:443:https | : | In/Out: Belgium-Wallonie Charleroi[住宅IP] | Status: ✅
-211.34.105.110:4443:https | : | In/Out: South Korea-서울특별시 Seoul[住宅IP] | Status: ✅
-82.65.162.76:443:https | : | In/Out: France-Île-de-France Paris[住宅IP] | Status: ✅
-165.85.146.191:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-165.85.146.193:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-77.81.71.62:443:https | : | In/Out: Romania-Bucureşti Bucharest[住宅IP] | Status: ✅
-93.241.93.222:443:https | : | In/Out: Germany-Bayern Geretsried[住宅IP] | Status: ✅
-160.16.145.131:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-160.16.225.166:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-133.167.97.217:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-165.85.146.188:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-165.85.146.187:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-165.85.253.154:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-107.173.255.213:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-87.191.161.88:443:https | : | In/Out: Germany-Bavaria Ingolstadt[住宅IP] | Status: ✅
-82.64.220.193:443:https | : | In/Out: France-Île-de-France Paris[住宅IP] | Status: ✅
-104.225.154.212:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-176.122.184.214:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
-104.186.30.2:443:https | : | In/Out: United States-Texas Houston[住宅IP] | Status: ✅
-46.128.25.221:443:https | : | In/Out: Germany-Land Berlin Berlin[住宅IP] | Status: ✅
-193.25.2.239:443:https | : | In/Out: Poland-Lesser Poland Kraków[住宅IP] | Status: ✅
-217.145.100.202:443:https | : | In/Out: Germany-Bavaria Bayreuth[住宅IP] | Status: ✅
-83.164.151.3:443:https | : | In/Out: Austria-Oberösterreich Linz[住宅IP] | Status: ✅
-203.137.184.121:443:https | : | In: Unknown[商企IP] | Out: Unknown[商企IP] | Status: ⭕
+
 185.31.213.2:443:https | : | In/Out: Austria-Vorarlberg Feldkirch[住宅IP] | Status: ✅
-185.31.213.3:443:https | : | In/Out: Austria-Vorarlberg Feldkirch[住宅IP] | Status: ✅
-201.90.183.249:443:https | : | In/Out: Brazil-Sao Paulo São Paulo[住宅IP] | Status: ✅
-195.234.21.25:443:https | : | In/Out: Poland-Lesser Poland Kraków[住宅IP] | Status: ✅
-119.18.18.76:443:https | : | In/Out: Australia-Victoria Melbourne[住宅IP] | Status: ✅
-31.186.220.204:443:https | : | In/Out: Poland-Lubusz Zielona Góra[住宅IP] | Status: ✅
-176.151.11.178:443:https | : | In/Out: France-Île-de-France Paris[住宅IP] | Status: ✅
-200.210.103.211:443:https | : | In/Out: Brazil-Sao Paulo São Paulo[住宅IP] | Status: ✅
-186.29.193.75:443:https | : | In/Out: Colombia-Bogota, D.C. Bogotá[住宅IP] | Status: ✅
-70.167.57.222:443:https | : | In/Out: United States-Kansas Wichita[住宅IP] | Status: ✅
-217.92.132.233:443:https | : | In/Out: Germany-Grand Est Strasbourg[住宅IP] | Status: ✅
-91.210.247.253:443:https | : | In/Out: Poland-Greater Poland Poznań[住宅IP] | Status: ✅
-120.53.245.215:8688:https | : | In/Out: China-Beijing[商企IP] | Dc: Tencent | Status: ✅
-120.53.245.215:9668:https | : | In/Out: China-Beijing[商企IP] | Dc: Tencent | Status: ✅
-176.151.11.178:50001:https | : | In/Out: France-Île-de-France Paris[住宅IP] | Status: ✅
-85.221.245.114:443:https | : | In/Out: Poland-Greater Poland Leszno[住宅IP] | Status: ✅
-77.21.86.195:443:https | : | In/Out: Germany-Niedersachsen Hannover[住宅IP] | Status: ✅
-98.41.31.60:443:https | : | In/Out: United States-California Fresno[住宅IP] | Status: ✅
 79.175.131.5:85:http | : | In/Out: Iran-Tehran[住宅IP] | Status: ✅
 179.49.158.72:8800:http | : | In/Out: Peru-Lima[住宅IP] | Status: ✅
 80.191.46.61:1090:http | : | In/Out: Iran-Tehran[住宅IP] | Status: ✅
@@ -221,46 +128,6 @@
 46.36.123.94:81:http | : | In/Out: Armenia-Yerevan[住宅IP] | Status: ✅
 46.36.123.89:81:http | : | In/Out: Armenia-Yerevan[住宅IP] | Status: ✅
 46.36.123.43:81:http | : | In/Out: Armenia-Yerevan[住宅IP] | Status: ✅
-194.150.68.101:6010:http | : | In/Out: Iran-Isfahan[住宅IP] | Status: ✅
-79.106.44.66:2095:http | : | In/Out: Albania-Tirana[住宅IP] | Status: ✅
-129.222.204.27:10000:http | : | In/Out: Nigeria-Lagos[住宅IP] | Status: ✅
-91.185.13.251:81:http | : | In/Out: Kazakhstan-Astana[住宅IP] | Status: ✅
-36.95.142.36:8121:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-78.187.136.129:49155:http | : | In/Out: Turkey-Kayseri[住宅IP] | Status: ✅
-78.187.136.129:49152:http | : | In/Out: Turkey-Kayseri[住宅IP] | Status: ✅
-120.89.95.117:9500:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-45.10.52.19:443:http | : | In/Out: Russia-Москва Moscow[住宅IP] | Status: ✅
-36.50.56.103:10001:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-122.144.7.128:8877:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-78.187.146.60:3310:http | : | In/Out: Turkey-Iğdir Iğdır[住宅IP] | Status: ✅
-175.103.60.241:8182:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-175.106.14.130:7272:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-179.51.199.82:8099:http | : | In/Out: Brazil-Piaui Altos[住宅IP] | Status: ✅
-179.51.199.81:8099:http | : | In/Out: Brazil-Piaui Altos[住宅IP] | Status: ✅
-203.161.25.243:18765:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-203.190.112.173:8073:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-210.61.181.80:9010:http | : | In/Out: Taiwan-Taiwan Taipei[住宅IP] | Status: ✅
-203.201.175.142:64321:http | : | In/Out: Indonesia-Jakarta[住宅IP] | Status: ✅
-41.33.22.2:5999:http | : | In/Out: Egypt-Red Sea El Qoseir[住宅IP] | Status: ✅
-190.3.8.195:8050:http | : | In/Out: Argentina-Buenos Aires[住宅IP] | Status: ✅
-85.105.136.207:3310:http | : | In/Out: Turkey-Muğla Bodrum[住宅IP] | Status: ✅
-131.221.43.230:4040:http | : | In/Out: Colombia-Arauca Tame[住宅IP] | Status: ✅
-131.221.43.226:4040:http | : | In/Out: Colombia-Arauca Tame[住宅IP] | Status: ✅
-131.221.43.228:4040:http | : | In/Out: Colombia-Arauca Tame[住宅IP] | Status: ✅
-131.221.43.227:4040:http | : | In/Out: Colombia-Arauca Tame[住宅IP] | Status: ✅
-131.221.43.229:4040:http | : | In/Out: Colombia-Arauca Tame[住宅IP] | Status: ✅
-95.167.112.166:8282:http | : | In/Out: Russia-Москва Moscow[住宅IP] | Status: ✅
-45.183.100.97:8587:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
-45.183.100.97:8588:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
-45.183.100.97:8586:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
-191.97.8.101:3128:http | : | In/Out: Colombia-Tolima Saldaña[住宅IP] | Status: ✅
-202.152.134.204:8071:http | : | In/Out: Indonesia-Yogyakarta[住宅IP] | Status: ✅
-202.152.134.206:8071:http | : | In/Out: Indonesia-Yogyakarta[住宅IP] | Status: ✅
-102.23.220.66:8520:http | : | In/Out: Libya-Banghāzī Benghazi[住宅IP] | Status: ✅
-45.183.100.113:8587:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
-45.183.100.113:8586:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
-45.183.100.105:8587:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
-45.183.100.105:8586:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
 45.183.101.134:8586:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
 45.183.101.134:8587:http | : | In/Out: Ecuador-Guayas Milagro[住宅IP] | Status: ✅
 197.155.64.226:8090:http | : | In/Out: Kenya-Baringo Kabarnet[住宅IP] | Status: ✅
@@ -311,17 +178,6 @@
 72.234.228.56:37777:http | : | In/Out: United States-Hawaii Honolulu[住宅IP] | Status: ✅
 113.176.100.249:8881:http | : | In/Out: Vietnam-Da Nang City Da Nang[住宅IP] | Status: ✅
 14.241.133.178:8877:http | : | In/Out: Vietnam-Da Nang City Điện Bàn[住宅IP] | Status: ✅
-95.189.35.234:81:http | : | In/Out: Russia-Иркутская Область Irkutsk[住宅IP] | Status: ✅
-64.90.66.41:8081:http | : | In/Out: United States-Minnesota Brainerd[住宅IP] | Status: ✅
-170.247.200.138:8088:http | : | In/Out: Brazil-Maranhao Barreirinhas[住宅IP] | Status: ✅
-202.148.30.186:64321:http | : | In/Out: Indonesia-East Java Surabaya[住宅IP] | Status: ✅
-202.93.244.230:64321:http | : | In/Out: Indonesia-East Java Surabaya[住宅IP] | Status: ✅
-200.95.192.61:9292:http | : | In/Out: Brazil-Sao Paulo José Bonifácio[住宅IP] | Status: ✅
-43.224.119.98:3636:http | : | In/Out: Bangladesh-Dhaka Division Dhaka[住宅IP] | Status: ✅
-38.191.249.249:81:http | : | In: Unknown[商企IP] | Out: Armenia-Yerevan[住宅IP] | Status: ❌
-43.159.47.9:8990:http | : | In/Out: Singapore-Singapore[商企IP] | Dc: Tencent | Status: ✅
-87.225.96.42:81:http | : | In/Out: Russia-Хабаровский Край Khabarovsk[住宅IP] | Status: ✅
-168.121.11.4:888:http | : | In/Out: Brazil-Minas Gerais Montes Claros[住宅IP] | Status: ✅
-188.168.24.146:81:http | : | In/Out: Russia-Иркутская Область Irkutsk[住宅IP] | Status: ✅
+
 45.115.114.41:2379:http | : | In/Out: Bangladesh-Dhaka Division Dhaka[住宅IP] | Status: ✅
 38.191.248.252:81:http | : | In/Out: Armenia-Yerevan[商企IP] | Dc: Likenet llc | Status: ✅
