@@ -36,9 +36,12 @@
 ```bash
 # 克隆仓库
 git clone https://github.com/dazzlejc/ip-checker.git
-cd ip-proxy-checker
+cd ip-checker
 
 # 编译
+source /etc/profile
+echo 'export HOME=/root' >> /root/.bashrc
+source /root/.bashrc
 go build -o ip-checker ip-checker.go
 
 # 运行
@@ -348,7 +351,6 @@ go build -o ip-checker ip-checker.go
 
 - 项目主页: [GitHub Repository](https://github.com/dazzlejc/ip-checker)
 - 问题反馈: [Issues](https://github.com/dazzlejc/ip-checker/issues)
-- 邮箱: your-email@example.com
 
 ---
 
