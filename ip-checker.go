@@ -15,10 +15,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1038,181 +1036,10 @@ func updateGeoIPDatabase() {
 	reader.ReadString('\n')
 }
 
-// showConfigMenu 显示配置菜单
-func showConfigMenu() {
-	for {
-		clearScreen()
-		fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
-		fmt.Println(ColorCyan + "║" + ColorYellow + "                    ⚙️ 配置设置菜单                      " + ColorReset + ColorCyan + "║" + ColorReset)
-		fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
-		fmt.Println()
 
-		fmt.Println(ColorYellow + "┌─────────────────────── 配置选项 ───────────────────────┐" + ColorReset)
-		fmt.Println("│ " + ColorBlue + "1. 📝 查看/编辑配置文件" + ColorReset + "                            │")
-		fmt.Println("│ " + ColorGreen + "2. 🔄 重新加载配置" + ColorReset + "                                 │")
-		fmt.Println("│ " + ColorCyan + "3. 📊 显示当前配置" + ColorReset + "                                 │")
-		fmt.Println("│ " + ColorRed + "4. 🔙 返回主菜单" + ColorReset + "                                     │")
-		fmt.Println(ColorYellow + "└─────────────────────────────────────────────────┘" + ColorReset)
-		fmt.Println()
 
-		fmt.Print(ColorGreen + "请输入您的选择 (1-4): " + ColorReset)
 
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		choice := strings.TrimSpace(input)
 
-		switch choice {
-		case "1":
-			fmt.Println(ColorBlue + "📝 请使用文本编辑器编辑 config.ini 文件" + ColorReset)
-			fmt.Println(ColorYellow + "按 Enter 键继续..." + ColorReset)
-			reader.ReadString('\n')
-		case "2":
-			if err := loadConfig("config.ini"); err != nil {
-				fmt.Println(ColorRed + "❌ 配置重载失败: " + err.Error() + ColorReset)
-			} else {
-				fmt.Println(ColorGreen + "✅ 配置重载成功！" + ColorReset)
-			}
-			fmt.Println(ColorYellow + "按 Enter 键继续..." + ColorReset)
-			reader.ReadString('\n')
-		case "3":
-			showCurrentConfig()
-		case "4":
-			return
-		default:
-			fmt.Println(ColorRed + "\n⚠️ 无效的选择，请输入 1-4 之间的数字。" + ColorReset)
-			time.Sleep(2 * time.Second)
-		}
-	}
-}
-
-// showCurrentConfig 显示当前配置
-func showCurrentConfig() {
-	clearScreen()
-	fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
-	fmt.Println(ColorCyan + "║" + ColorYellow + "                    📊 当前配置信息                      " + ColorReset + ColorCyan + "║" + ColorReset)
-	fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
-	fmt.Println()
-
-	fmt.Println(ColorYellow + "📋 基本设置:" + ColorReset)
-	fmt.Printf("  - 代理目录: %s\n", config.Settings.FdipDir)
-	fmt.Printf("  - 最大并发: %d\n", config.Settings.MaxConcurrent)
-	fmt.Printf("  - 检测超时: %d 秒\n", config.Settings.CheckTimeout)
-	fmt.Printf("  - 输出目录: %s\n", config.Settings.OutputDir)
-	fmt.Println()
-
-	fmt.Println(ColorYellow + "📱 Telegram 设置:" + ColorReset)
-	if config.Telegram.BotToken != "" {
-		fmt.Printf("  - Bot Token: %s...%s\n",
-			config.Telegram.BotToken[:min(10, len(config.Telegram.BotToken))],
-			config.Telegram.BotToken[max(0, len(config.Telegram.BotToken)-4):])
-	} else {
-		fmt.Println("  - Bot Token: 未配置")
-	}
-
-	if config.Telegram.ChatID != "" {
-		fmt.Printf("  - Chat ID: %s\n", config.Telegram.ChatID)
-	} else {
-		fmt.Println("  - Chat ID: 未配置")
-	}
-	fmt.Println()
-
-	fmt.Println(ColorYellow + "🔧 IP检测设置:" + ColorReset)
-	fmt.Printf("  - IP检测启用: %t\n", config.IPDetection.Enabled)
-	fmt.Printf("  - 最大并发: %d\n", config.IPDetection.MaxConcurrent)
-	fmt.Printf("  - 超时时间: %d 秒\n", config.IPDetection.Timeout)
-	fmt.Printf("  - 服务数量: %d\n", len(config.IPDetection.Services))
-	fmt.Println()
-
-	fmt.Println(ColorGreen + "按 Enter 键返回配置菜单..." + ColorReset)
-	reader := bufio.NewReader(os.Stdin)
-	reader.ReadString('\n')
-}
-
-// showStatistics 显示统计信息
-func showStatistics() {
-	clearScreen()
-	fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
-	fmt.Println(ColorCyan + "║" + ColorMagenta + "                    📊 统计信息                         " + ColorReset + ColorCyan + "║" + ColorReset)
-	fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
-	fmt.Println()
-
-	fmt.Println(ColorYellow + "🔧 系统信息:" + ColorReset)
-	fmt.Printf("  - Go 版本: %s\n", runtime.Version())
-	fmt.Printf("  - 操作系统: %s\n", runtime.GOOS)
-	fmt.Printf("  - 架构: %s\n", runtime.GOARCH)
-	fmt.Printf("  - CPU 核心数: %d\n", runtime.NumCPU())
-	fmt.Printf("  - 内存使用: %.2f MB\n", float64(getMemoryUsage())/1024/1024)
-	fmt.Println()
-
-	// 检查代理目录中的文件数量
-	fdipPath := filepath.Join(".", config.Settings.FdipDir)
-	if files, err := os.ReadDir(fdipPath); err == nil {
-		fmt.Printf(ColorGreen + "📁 代理目录 '%s' 中有 %d 个文件\n" + ColorReset, config.Settings.FdipDir, len(files))
-	}
-
-	// GeoIP 数据库信息
-	if fileInfo, err := os.Stat(GEOIP_DB_PATH); err == nil {
-		sizeMB := float64(fileInfo.Size()) / 1024 / 1024
-		fmt.Printf(ColorGreen + "🌐 GeoIP 数据库大小: %.2f MB\n" + ColorReset, sizeMB)
-		fmt.Printf(ColorGreen + "🌐 最后更新: %s\n" + ColorReset, fileInfo.ModTime().Format("2006-01-02 15:04:05"))
-	}
-
-	fmt.Println()
-	fmt.Println(ColorGreen + "按 Enter 键返回主菜单..." + ColorReset)
-	reader := bufio.NewReader(os.Stdin)
-	reader.ReadString('\n')
-}
-
-// testNetworkConnection 测试网络连接
-func testNetworkConnection() {
-	clearScreen()
-	fmt.Println(ColorCyan + "╔═══════════════════════════════════════════════════════════════╗" + ColorReset)
-	fmt.Println(ColorCyan + "║" + ColorYellow + "                    🧪 网络连接测试                       " + ColorReset + ColorCyan + "║" + ColorReset)
-	fmt.Println(ColorCyan + "╚═══════════════════════════════════════════════════════════════╝" + ColorReset)
-	fmt.Println()
-
-	testSites := []string{
-		"www.google.com",
-		"www.github.com",
-		"www.cloudflare.com",
-		"8.8.8.8",
-	}
-
-	fmt.Println(ColorYellow + "正在测试网络连接..." + ColorReset)
-	fmt.Println()
-
-	for _, site := range testSites {
-		fmt.Printf(ColorBlue + "🔍 测试连接到: %s" + ColorReset, site)
-
-		start := time.Now()
-		cmd := exec.Command("ping", "-n", "1", site)
-		if runtime.GOOS != "windows" {
-			cmd = exec.Command("ping", "-c", "1", site)
-		}
-
-		_, err := cmd.Output()
-		duration := time.Since(start)
-
-		if err != nil {
-			fmt.Printf(ColorRed + " ❌ 失败 (%.2fs)\n" + ColorReset, duration.Seconds())
-		} else {
-			fmt.Printf(ColorGreen + " ✅ 成功 (%.2fs)\n" + ColorReset, duration.Seconds())
-		}
-	}
-
-	fmt.Println()
-	fmt.Println(ColorGreen + "网络连接测试完成！" + ColorReset)
-	fmt.Println(ColorYellow + "按 Enter 键返回主菜单..." + ColorReset)
-	reader := bufio.NewReader(os.Stdin)
-	reader.ReadString('\n')
-}
-
-// getMemoryUsage 获取内存使用情况
-func getMemoryUsage() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return m.Alloc
-}
 
 // max 返回两个整数中的较大值
 func max(a, b int) int {
@@ -3344,17 +3171,14 @@ func showMenu() {
 		fmt.Println(ColorYellow + "┌─────────────────────── 主菜单 ───────────────────────┐" + ColorReset)
 		fmt.Println("│ " + ColorGreen + "1. 🔍 开始代理检测" + ColorReset + "                                   │")
 		fmt.Println("│ " + ColorBlue + "2. 🌐 更新 GeoIP 数据库" + ColorReset + "                            │")
-		fmt.Println("│ " + ColorCyan + "3. ⚙️  配置设置" + ColorReset + "                                       │")
-		fmt.Println("│ " + ColorMagenta + "4. 📊 查看统计信息" + ColorReset + "                                 │")
-		fmt.Println("│ " + ColorYellow + "5. 🧪 测试网络连接" + ColorReset + "                                 │")
-		fmt.Println("│ " + ColorRed + "6. ❌ 退出程序" + ColorReset + "                                       │")
+		fmt.Println("│ " + ColorRed + "3. ❌ 退出程序" + ColorReset + "                                       │")
 		fmt.Println(ColorYellow + "└─────────────────────────────────────────────────┘" + ColorReset)
 		fmt.Println()
 
 		// 显示配置状态
 		displayConfigStatus()
 
-		fmt.Print(ColorGreen + "请输入您的选择 (1-6): " + ColorReset)
+		fmt.Print(ColorGreen + "请输入您的选择 (1-3): " + ColorReset)
 
 		reader := bufio.NewReader(os.Stdin)
 		input, _ := reader.ReadString('\n')
@@ -3366,18 +3190,12 @@ func showMenu() {
 		case "2":
 			updateGeoIPDatabase()
 		case "3":
-			showConfigMenu()
-		case "4":
-			showStatistics()
-		case "5":
-			testNetworkConnection()
-		case "6":
 			fmt.Println(ColorGreen + "👋 感谢使用 IP 代理检测工具！" + ColorReset)
 			fmt.Println(ColorYellow + "程序正在退出..." + ColorReset)
 			time.Sleep(1 * time.Second)
 			return
 		default:
-			fmt.Println(ColorRed + "\n⚠️ 无效的选择，请输入 1-6 之间的数字。" + ColorReset)
+			fmt.Println(ColorRed + "\n⚠️ 无效的选择，请输入 1-3 之间的数字。" + ColorReset)
 			time.Sleep(2 * time.Second)
 		}
 	}
